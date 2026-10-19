@@ -39,39 +39,24 @@ class WebDavSyncService {
       'Cache-Control': 'no-cache',
     };
     try {
-      final response = await _client.requestExternal<ResponseBody>(
-        url,
-        method: 'GET',
-        headers: headers,
-        responseType: ResponseType.stream,
-      );
-      final downloaded = BytesBuilder(copy: false);
-      final body = response.data;
-      if (body != null) {
-        await for (final chunk in body.stream) {
-          if (downloaded.length + chunk.length >
-              S1BackupCodec.maxCompressedBytes) {
-            throw const WebDavSyncException('云端同步文件超过 16 MB，未修改本机数据');
-          }
-          downloaded.add(chunk);
-        }
-      }
-      final exists = response.statusCode != 404;
-      if (exists) _checkStatus(response.statusCode);
+      final downloaded = await _download(url, headers);
+      final exists = downloaded.bytes != null;
       S1BackupPayload? remote;
       String? etag;
+      var verifyContent = false;
       if (exists) {
-        final bytes = downloaded.takeBytes();
-        if (bytes.isEmpty) {
-          throw const WebDavSyncException('云端同步文件为空，未覆盖本机数据');
-        }
-        remote = S1BackupCodec.decode(bytes);
-        etag = response.headers.value('etag');
-        if (etag == null || !etag.startsWith('"') || !etag.endsWith('"')) {
+        remote = S1BackupCodec.decode(downloaded.bytes!);
+        etag = downloaded.etag?.trim();
+        final strong = etag != null && _strongEtag.hasMatch(etag);
+        // 坚果云等服务返回无引号的 opaque ETag；If-Match 必须保留原值，
+        // 不能擅自加引号或去掉弱标记。兼容路径额外核验上传前后的内容。
+        final bare = etag != null && _bareEtag.hasMatch(etag);
+        if (!strong && !bare) {
           throw const WebDavSyncException(
-            '服务器未提供强 ETag，无法安全同步；Web 端请允许读取 ETag 响应头',
+            '服务器未提供可用的 ETag，无法进行条件同步；Web 端请允许读取 ETag 响应头',
           );
         }
+        verifyContent = bare;
       }
 
       S1BackupPayload? base;
@@ -100,6 +85,13 @@ class WebDavSyncService {
       final upload = S1BackupCodec.encode(merged);
       // 上传前也验证大小，避免写出自己无法再导入的同步文件。
       S1BackupCodec.decode(upload);
+      if (verifyContent) {
+        final currentRemote = await _download(url, headers);
+        if (currentRemote.etag?.trim() != etag ||
+            !_sameBytes(currentRemote.bytes, downloaded.bytes!)) {
+          _checkStatus(412);
+        }
+      }
       final put = await _client.requestExternal<List<int>>(
         url,
         method: 'PUT',
@@ -111,6 +103,14 @@ class WebDavSyncService {
         data: Stream.value(upload),
       );
       _checkStatus(put.statusCode);
+      if (verifyContent) {
+        final saved = await _download(url, headers);
+        if (!_sameBytes(saved.bytes, upload)) {
+          throw const WebDavSyncException(
+            '云端同步文件写入后校验不一致，可能有其他设备同时同步；本机数据已保留，请稍后重试',
+          );
+        }
+      }
 
       // 上传期间用户仍可阅读/改设置；将这些新改动保留在本机，下次再上传。
       final current = await snapshot();
@@ -138,6 +138,49 @@ class WebDavSyncService {
     } on FormatException {
       throw const WebDavSyncException('同步文件格式无效，未覆盖本机数据');
     }
+  }
+
+  // 标准强 ETag 允许 opaque 部分包含逗号；无引号兼容值只接受单个 token，
+  // 拒绝弱 ETag、通配符、列表和控制字符，避免改变 If-Match 的含义。
+  static final _strongEtag = RegExp(r'^"[\x21\x23-\x7e\x80-\xff]*"$');
+  static final _bareEtag = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]*$');
+
+  Future<({Uint8List? bytes, String? etag})> _download(
+    String url,
+    Map<String, String> headers,
+  ) async {
+    final response = await _client.requestExternal<ResponseBody>(
+      url,
+      method: 'GET',
+      headers: headers,
+      responseType: ResponseType.stream,
+    );
+    final downloaded = BytesBuilder(copy: false);
+    final body = response.data;
+    if (body != null) {
+      await for (final chunk in body.stream) {
+        if (downloaded.length + chunk.length >
+            S1BackupCodec.maxCompressedBytes) {
+          throw const WebDavSyncException('云端同步文件超过 16 MB，未修改本机数据');
+        }
+        downloaded.add(chunk);
+      }
+    }
+    if (response.statusCode == 404) return (bytes: null, etag: null);
+    _checkStatus(response.statusCode);
+    final bytes = downloaded.takeBytes();
+    if (bytes.isEmpty) {
+      throw const WebDavSyncException('云端同步文件为空，未覆盖本机数据');
+    }
+    return (bytes: bytes, etag: response.headers.value('etag'));
+  }
+
+  static bool _sameBytes(Uint8List? actual, Uint8List expected) {
+    if (actual == null || actual.length != expected.length) return false;
+    for (var i = 0; i < expected.length; i++) {
+      if (actual[i] != expected[i]) return false;
+    }
+    return true;
   }
 
   static void _checkStatus(int? status) {

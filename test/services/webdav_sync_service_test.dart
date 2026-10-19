@@ -30,8 +30,12 @@ void main() {
   var conflict = false;
   var omitEtag = false;
   var putCalls = 0;
+  var getCalls = 0;
   var requests = <HttpRequest>[];
+  String Function(int)? formatEtag;
+  Future<void> Function(int)? onGet;
   Future<void> Function()? onPut;
+  Future<void> Function()? afterPut;
 
   final info = PackageInfo(
     appName: 'S1er',
@@ -93,18 +97,27 @@ void main() {
     conflict = false;
     omitEtag = false;
     putCalls = 0;
+    getCalls = 0;
     requests = [];
+    formatEtag = null;
+    onGet = null;
     onPut = null;
+    afterPut = null;
     server.listen((request) async {
       requests.add(request);
       final response = request.response;
       if (request.method == 'GET') {
+        getCalls++;
+        await onGet?.call(getCalls);
         if (failGet != 0) {
           response.statusCode = failGet;
         } else if (cloud == null) {
           response.statusCode = 404;
         } else {
-          if (!omitEtag) response.headers.set('etag', '"$revision"');
+          if (!omitEtag) {
+            response.headers
+                .set('etag', formatEtag?.call(revision) ?? '"$revision"');
+          }
           response.add(cloud!);
         }
       } else if (request.method == 'PUT') {
@@ -114,13 +127,15 @@ void main() {
         await onPut?.call();
         final expected = cloud == null
             ? request.headers.value('if-none-match') == '*'
-            : request.headers.value('if-match') == '"$revision"';
+            : request.headers.value('if-match') ==
+                (formatEtag?.call(revision) ?? '"$revision"');
         if (conflict || !expected) {
           response.statusCode = 412;
         } else {
           cloud = Uint8List.fromList(data);
           revision++;
           response.statusCode = 201;
+          await afterPut?.call();
         }
       }
       await response.close();
@@ -247,6 +262,122 @@ void main() {
       isFalse,
     );
   });
+
+  test('Nutstore bare ETag is preserved and repeated sync verifies content',
+      () async {
+    formatEtag = (value) => 'nutstore-$value';
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    await sync();
+    expect(local.settings.get<String>('themeMode'), 'dark');
+    expect(getCalls, 3);
+    expect(
+      requests.singleWhere((r) => r.method == 'PUT').headers.value('if-match'),
+      'nutstore-1',
+    );
+    await local.settings.putAsync('fontSize', 20);
+    await sync();
+    expect(S1BackupCodec.decode(cloud!).settings!['font_size'], 20);
+    expect(putCalls, 2);
+    expect(getCalls, 6);
+  });
+
+  test('bare ETag preflight detects changed content even if ETag is unchanged',
+      () async {
+    formatEtag = (value) => '$value';
+    await sync();
+    final baseline = local.settings.get<Object>(WebDavSyncService.baselineKey);
+    final changed = S1BackupCodec.encode(
+      payload(settings: {'theme_mode': 'dark'}),
+    );
+    getCalls = 0;
+    putCalls = 0;
+    onGet = (count) async {
+      if (count == 2) cloud = changed;
+    };
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>()
+            .having((e) => e.message, 'message', contains('另一台设备')),
+      ),
+    );
+    expect(cloud, changed);
+    expect(putCalls, 0);
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), baseline);
+  });
+
+  test('bare ETag still uses conditional PUT when another device wins the race',
+      () async {
+    formatEtag = (value) => '$value';
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    final oldCloud = cloud;
+    onPut = () async {
+      revision++;
+    };
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    expect(putCalls, 1);
+    expect(cloud, oldCloud);
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), isNull);
+  });
+
+  test('bare ETag write verification failure preserves local data and baseline',
+      () async {
+    formatEtag = (value) => '$value';
+    await local.settings.putAsync('themeMode', 'light');
+    await sync();
+    final baseline = local.settings.get<Object>(WebDavSyncService.baselineKey);
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    revision++;
+    afterPut = () async {
+      cloud = S1BackupCodec.encode(payload(settings: {'font_size': 18}));
+      revision++;
+    };
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>()
+            .having((e) => e.message, 'message', contains('写入后校验不一致')),
+      ),
+    );
+    expect(local.settings.get<String>('themeMode'), 'light');
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), baseline);
+  });
+
+  test('bare ETag preflight does not recreate a concurrently deleted file',
+      () async {
+    formatEtag = (value) => '$value';
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    onGet = (count) async {
+      if (count == 2) cloud = null;
+    };
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    expect(putCalls, 0);
+    expect(cloud, isNull);
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
+  });
+
+  test('quoted strong ETag with comma retains the standard single GET path',
+      () async {
+    formatEtag = (value) => '"$value,version"';
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    await sync();
+    expect(local.settings.get<String>('themeMode'), 'dark');
+    expect(getCalls, 1);
+    expect(requests.last.headers.value('if-match'), '"1,version"');
+  });
+
+  for (final invalidEtag in ['W/"1"', '*', '"1", "2"', '1,2', 'W/1']) {
+    test('unsafe ETag $invalidEtag never uploads or imports', () async {
+      formatEtag = (_) => invalidEtag;
+      cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+      await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+      expect(putCalls, 0);
+      expect(local.settings.get<String>('themeMode'), isNot('dark'));
+      expect(local.settings.get<Object>(WebDavSyncService.baselineKey), isNull);
+    });
+  }
 
   test('invalid archive and missing ETag never upload or modify local data',
       () async {

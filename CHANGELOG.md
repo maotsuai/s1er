@@ -5,6 +5,12 @@ All notable changes to S1er will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-10-19
+
+### Fixed
+
+- **坚果云 WebDAV 同步**：兼容服务器返回的无引号 ETag，修复 iOS 等平台提示「服务器未提供强 ETag」导致同步中断；保留原始标识条件上传，并增加上传前、写入后的完整文件校验，失败时保留本机数据与合并基线。
+
 ## [0.10.0] - 2026-10-19
 
 ### Added
