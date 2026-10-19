@@ -77,6 +77,9 @@ function Get-PubspecVersion {
     if ($raw -notmatch '^(\d+)\.(\d+)\.(\d+)\+(\d+)$') {
         throw "pubspec.yaml version must look like 0.1.0+1, got: $raw"
     }
+    $name = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    # Fork 跟随上游 name，只加 build；完整标签避免与上游已有 tag 冲突。
+    $tag = if ($RepoSlug -ine 'Shirolin/s1er') { "v$raw" } else { "v$name" }
     return [pscustomobject]@{
         Raw   = $raw
         Name  = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
@@ -84,7 +87,7 @@ function Get-PubspecVersion {
         Minor = [int]$Matches[2]
         Patch = [int]$Matches[3]
         Build = [int]$Matches[4]
-        Tag   = "v$($Matches[1]).$($Matches[2]).$($Matches[3])"
+        Tag   = $tag
         Label = $raw
     }
 }
@@ -402,7 +405,8 @@ function Step-Create {
     } else {
         Write-Host "Creating Release $($v.Tag) (notes only, no assets)..." -ForegroundColor Cyan
         if (-not $DryRun) {
-            $ghArgs = @('release', 'create', $v.Tag, '--repo', $RepoSlug, '--title', "S1er $($v.Name)", '--notes-file', $arts.Notes)
+            $title = if ($RepoSlug -ine 'Shirolin/s1er') { "S1er $($v.Label)" } else { "S1er $($v.Name)" }
+            $ghArgs = @('release', 'create', $v.Tag, '--repo', $RepoSlug, '--title', $title, '--notes-file', $arts.Notes)
             if ($Draft) { $ghArgs += '--draft' } else { $ghArgs += '--latest' }
             if ($TargetCommit) { $ghArgs += @('--target', $TargetCommit) }
             & gh @ghArgs

@@ -230,6 +230,7 @@ flutter run -d chrome --dart-define=TALKER_LOG_LEVEL=all --dart-define=TALKER_MA
 - **`manifest` 必须写入四个 APK 直链**（`release.ps1` 已内置校验，缺字段会抛错）。改发版逻辑时须同步 `docs/release/README.md` 与相关测试。
 - **版本号格式与 `+build` 规则**：`pubspec.yaml` 格式为 `version: name+build`（如 `0.5.0+5`）。`name`（如 `0.5.0`）是面向用户的产品版本；`build`（如 `+5`）对应 Android `versionCode`。受 Android 降级安装机制（`INSTALL_FAILED_VERSION_DOWNGRADE`）限制，**`build` 必须在全项目中严格单调递增**，跨大/小版本时切勿重置为 `+1`。
 - **版本比较只看 `pubspec` name**（如 `0.3.5`），忽略 `+build`；仅抬 build 不必改 `latest`。
+- **本 fork 版本跟随上游**：合并上游后保留上游产品版本 name，将其 `+build` 尾数加 1（如上游 `0.9.1+15` → fork `0.9.1+16`），不自行提升产品版本。fork Release 标签与标题包含完整 name+build；原仓库保留 `v<name>`。仍须通过 `release.ps1 manifest` 生成对应完整标签的下载链接。
 
 ---
 

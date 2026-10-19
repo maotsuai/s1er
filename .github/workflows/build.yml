@@ -215,15 +215,17 @@ jobs:
         shell: pwsh
         run: |
           $name = [regex]::Match((Get-Content pubspec.yaml -Raw), '(?m)^version:\s*(\d+\.\d+\.\d+)').Groups[1].Value
+          $version = [regex]::Match((Get-Content pubspec.yaml -Raw), '(?m)^version:\s*(\d+\.\d+\.\d+\+\d+)').Groups[1].Value
+          $tag = if ($env:GITHUB_REPOSITORY -ine 'Shirolin/s1er') { "v$version" } else { "v$name" }
           $catalog = Get-Content assets/changelog/whats_new.json -Raw | ConvertFrom-Json
           $entry = $catalog.entries | Where-Object version -eq $name | Select-Object -First 1
           if (-not $entry) { throw 'Missing current version in whats_new.json' }
           $notes = "Beta — ${name}：" + (($entry.highlights | Select-Object -First 2) -join '；')
           pwsh -File scripts/release.ps1 manifest -Repository $env:GITHUB_REPOSITORY -ManifestNotes $notes
           if ($LASTEXITCODE -ne 0) { throw 'Manifest generation failed' }
-          gh release upload "v$name" docs/release/latest.json --repo $env:GITHUB_REPOSITORY --clobber
+          gh release upload $tag docs/release/latest.json --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Manifest upload failed' }
-          gh release edit "v$name" --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          gh release edit $tag --repo $env:GITHUB_REPOSITORY --draft=false --latest
           if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
       - name: Commit generated manifest
         shell: bash

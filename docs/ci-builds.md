@@ -4,7 +4,7 @@
 
 Windows 固定 `windows-2022`（VS 2022），规避当前 `gal` 使用的 experimental coroutine 与 VS 2026 的编译不兼容。Android 二进制校验遵循 Flutter 分包规则：universal 为 `build`，armeabi-v7a / arm64-v8a / x86_64 分别为 `1000 / 2000 / 4000 + build`。
 
-主分支构建全部成功后，成品自动发布到本仓库的 **Releases**，tag 为 `v<pubspec name>`，例如 `v0.10.0`。PR 只验证构建，不发布 Release。Actions Artifacts 作为任务间传递与下载备份，保留 14 天。
+主分支构建全部成功后，成品自动发布到本仓库的 **Releases**。本 fork 跟随上游产品版本，同步上游后将其 `+build` 尾数加 1，例如上游 `0.9.1+15` → 本 fork `0.9.1+16`；tag 使用完整版本 `v0.9.1+16`，避免与上游 `v0.9.1` 冲突。原仓库 `Shirolin/s1er` 仍使用 `v<name>`。PR 只验证构建，不发布 Release。Actions Artifacts 作为任务间传递与下载备份，保留 14 天。
 
 | 平台 | 内容 |
 | --- | --- |
@@ -30,7 +30,7 @@ Windows 固定 `windows-2022`（VS 2022），规避当前 `gal` 使用的 experi
 
 ## 发布与版本
 
-所有平台的构建统一调用 `pwsh -File scripts/release.ps1 build -Platform ...`，脚本先 `flutter clean`；Android 四种 APK 与 iOS App 在上传前检查二进制中的 name/build。产物文件名包含 `pubspec.yaml` 的完整版本，发布前须先按 [发版流程](release/README.md) 更新版本、CHANGELOG 和应用内新功能说明。`+build` 必须严格递增；已存在的版本 tag 若属于另一个提交，发布会明确失败，须先提升产品版本后重新构建，不覆盖旧版本。
+所有平台的构建统一调用 `pwsh -File scripts/release.ps1 build -Platform ...`，脚本先 `flutter clean`；Android 四种 APK 与 iOS App 在上传前检查二进制中的 name/build。产物文件名包含 `pubspec.yaml` 的完整版本，发布前须先按 [发版流程](release/README.md) 更新版本、CHANGELOG 和应用内新功能说明。`+build` 须保持递增；已存在的完整版本 tag 若属于另一个提交，发布会明确失败，须提升 build 后重新构建，不覆盖旧版本。应用内版本比较仍只看 name，仅增加 build 不会弹出同产品版本的更新提示。
 
 Release job 显式使用 `${{ github.repository }}`，先建立 draft，上传七个包，再执行 `release.ps1 manifest` 生成四个 APK 直链与 Windows/iOS 链接，上传 `latest.json` 后才公开 Release。自动提交生成的清单，提交带 `[skip ci]` 避免重复构建。清单不会沿用上游网盘链接。
 

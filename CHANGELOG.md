@@ -5,23 +5,21 @@ All notable changes to S1er will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.10.1] - 2026-10-19
-
-### Fixed
-
-- **坚果云 WebDAV 同步**：兼容服务器返回的无引号 ETag，修复 iOS 等平台提示「服务器未提供强 ETag」导致同步中断；保留原始标识条件上传，并增加上传前、写入后的完整文件校验，失败时保留本机数据与合并基线。
-
-## [0.10.0] - 2026-10-19
+## [0.9.1] - 2026-10-19
 
 ### Added
 
-- **WebDAV 多端同步**：复用 L1 ZIP 备份，支持手动同步和每次冷启动自动同步；合并设置、阅读历史、投票、黑名单与置顶帖，传播删除并保留较新阅读进度。
-- **自动签到**：设置中可开启启动签到，等待已有登录会话恢复；同账号当日成功后跳过，失败不连续重试。
-- **云端构建与发布**：统一 Build workflow 构建 Android 四种 APK、Windows、Web 和未签名 iOS IPA，成功后自动上传到本 fork 的 GitHub Release。
+- **首页最近浏览**：论坛首页在收藏板块下方显示最近 3 条阅读记录，点按从上次楼层继续阅读；可收起，标题行「全部」进入完整阅读历史。没有记录时不显示。
+- **首页最近浏览开关**：设置 → 浏览行为可关闭首页展示，默认开启，并随 L1 备份同步。
+
+- **WebDAV 多端同步**：复用 L1 ZIP 备份，支持手动同步和冷启动自动同步，合并设置、阅读历史、投票、黑名单和置顶帖。
+- **自动签到**：设置中可开启启动签到，等待已有会话恢复，同账号当天成功后跳过。
+- **云端构建与发布**：默认 Build workflow 构建 Android、Windows、Web 和未签名 iOS IPA，使用完整 name+build 标签发布到本 fork 的 Release。
 
 ### Fixed
 
-- WebDAV 同步采用强 ETag 条件写入，阻止多端并发覆盖；损坏文件、超时和认证失败均保留本机数据，凭据仅存本机安全存储。
+- **坚果云 WebDAV 同步**：兼容无引号 ETag，保留原始标识条件上传，并核对上传前后的完整文件；冲突或校验失败时保留本机数据与合并基线。
+- WebDAV 同步传播单端删除、保留较新阅读进度，凭据仅存本机安全存储。
 - 图片操作菜单的自动化测试兼容 Linux runner 的平台能力差异。
 
 ## [0.9.0] - 2026-10-16

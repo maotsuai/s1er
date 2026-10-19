@@ -263,6 +263,19 @@ void main() {
     );
   });
 
+  test('upstream home recent-history preference survives two-way sync',
+      () async {
+    await local.settings.putAsync('showRecentHistoryOnHome', false);
+    await sync();
+    final remote = S1BackupCodec.decode(cloud!);
+    expect(remote.settings!['show_recent_history_on_home'], isFalse);
+    remote.settings!['show_recent_history_on_home'] = true;
+    cloud = S1BackupCodec.encode(remote);
+    revision++;
+    await sync();
+    expect(local.settings.get<bool>('showRecentHistoryOnHome'), isTrue);
+  });
+
   test('Nutstore bare ETag is preserved and repeated sync verifies content',
       () async {
     formatEtag = (value) => 'nutstore-$value';

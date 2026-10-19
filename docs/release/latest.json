@@ -1,20 +1,20 @@
 {
-  "latest": "0.10.1",
+  "latest": "0.9.1",
   "minSupported": "0.3.2",
-  "notes": "Beta — 0.10.1：修复坚果云 WebDAV 因 ETag 格式被误拒绝、无法同步的问题；兼容同步增加上传前与写入后内容校验，冲突或校验失败时保留本机数据",
+  "notes": "Beta — 0.9.1：首页新增最近浏览，点一下接着读",
   "publishedAt": "2026-10-19",
   "channels": {
-    "github": "https://github.com/maotsuai/s1er/releases/latest",
-    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-universal.apk",
-    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-arm64-v8a.apk",
-    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-armeabi-v7a.apk",
-    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-x86_64.apk",
-    "androidNetdisk": null,
-    "netdiskHint": null,
-    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-windows-x64.zip",
+    "github": "https://github.com/Shirolin/s1er/releases/latest",
+    "androidApk": "https://github.com/Shirolin/s1er/releases/download/v0.9.1/s1er-0.9.1%2B15-android-universal.apk",
+    "androidArm64V8aApk": "https://github.com/Shirolin/s1er/releases/download/v0.9.1/s1er-0.9.1%2B15-android-arm64-v8a.apk",
+    "androidArmeabiV7aApk": "https://github.com/Shirolin/s1er/releases/download/v0.9.1/s1er-0.9.1%2B15-android-armeabi-v7a.apk",
+    "androidX8664Apk": "https://github.com/Shirolin/s1er/releases/download/v0.9.1/s1er-0.9.1%2B15-android-x86_64.apk",
+    "androidNetdisk": "https://pan.quark.cn/s/c05196e3c06a",
+    "netdiskHint": "夸克网盘（GitHub 下载慢时可走这里）",
+    "windows": "https://github.com/Shirolin/s1er/releases/download/v0.9.1/s1er-0.9.1%2B15-windows-x64.zip",
     "linux": null,
     "macos": null,
-    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.10.1",
+    "ios": null,
     "play": null
   }
 }

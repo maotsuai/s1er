@@ -35,12 +35,21 @@ try {
     if ($manifest.notes -ne 'Metadata test') { throw 'Manifest notes mismatch' }
     foreach ($key in @('androidApk', 'androidArm64V8aApk', 'androidArmeabiV7aApk', 'androidX8664Apk', 'windows')) {
         $url = $manifest.channels.$key
-        if ($url -notlike 'https://github.com/maotsuai/s1er/releases/download/v1.3.0/*1.3.0%2B10*') {
+        if ($url -notlike 'https://github.com/maotsuai/s1er/releases/download/v1.3.0+10/*1.3.0%2B10*') {
             throw "Missing or wrong fork asset URL: $key"
         }
     }
-    if ($manifest.channels.ios -ne 'https://github.com/maotsuai/s1er/releases/tag/v1.3.0') { throw 'Wrong iOS release URL' }
+    if ($manifest.channels.ios -ne 'https://github.com/maotsuai/s1er/releases/tag/v1.3.0+10') { throw 'Wrong iOS release URL' }
     if ($manifest.channels.androidNetdisk -or $manifest.channels.netdiskHint) { throw 'Fork inherited upstream netdisk links' }
+
+    # 同一产品版本重打 build 必须有独立的 fork 标签；上游保留原 vName 规则。
+    Invoke-Helper @('bump-build', '-Repository', 'maotsuai/s1er')
+    Invoke-Helper @('manifest', '-Repository', 'maotsuai/s1er')
+    $next = [System.IO.File]::ReadAllText($manifestPath, $Utf8) | ConvertFrom-Json
+    if ($next.channels.ios -ne 'https://github.com/maotsuai/s1er/releases/tag/v1.3.0+11') { throw 'Build-only release reused the previous tag' }
+    Invoke-Helper @('manifest', '-Repository', 'Shirolin/s1er')
+    $upstream = [System.IO.File]::ReadAllText($manifestPath, $Utf8) | ConvertFrom-Json
+    if ($upstream.channels.ios -ne 'https://github.com/Shirolin/s1er/releases/tag/v1.3.0') { throw 'Upstream tag convention changed' }
 
     $before = [System.IO.File]::ReadAllText($manifestPath, $Utf8)
     Invoke-Helper @('manifest', '-Repository', 'other/repo', '-DryRun')

@@ -2,6 +2,8 @@
 
 本 fork 的默认 GitHub Actions `Build` 已接入完整发布：预先修改 `pubspec.yaml`、CHANGELOG 与新功能说明后推送 `main`，云端通过测试与审计，再调用 `pwsh -File scripts/release.ps1 build -Platform ...` 构建 Android、Windows、Web 与 iOS，校验二进制版本，上传 draft Release，执行 `manifest` 并公开 Release。详见 [云端构建与发布](../ci-builds.md)。本地无需构建安装包。
 
+本 fork 合并上游后保留其产品版本 name，将上游 `+build` 加 1（本次为 `0.9.1+15` → `0.9.1+16`）。fork Release 使用完整 `v<name>+<build>` 标签，原仓库保留 `v<name>`；`release.ps1` 根据 `-Repository` 自动选择，两种标签均由 `manifest` 生成下载链接。仅抬 build 时应用内版本比较仍只看 name。
+
 发版脚本通过 `-Repository owner/name` 显式指定仓库；未指定时从 `GITHUB_REPOSITORY` 或本地 `origin` 推断，避免误发到上游。`create -NoOpen -Draft -TargetCommit SHA` 支持 CI，`build -Platform android|windows|web|ios` 为分平台构建入口。
 
 客户端通过 `EnvConfig.updateManifestUrl`（默认 jsDelivr CDN：`cdn.jsdelivr.net/gh/Shirolin/s1er@main/docs/release/latest.json`，与本目录 [`latest.json`](latest.json) 同源）拉取版本信息，用于应用内升级提醒。
@@ -64,7 +66,7 @@ version: 0.1.0+1
    - Android 国内备选：`androidNetdisk`（分享链接）+ `netdiskHint`（提取码等说明，可空）
    - iOS：`ios`（TestFlight / App Store 链接）；未上架填 `null`，客户端回退 `github` 发布页。**网盘与 Play 链接仅对 Android 展示**，iOS/Web 升级弹窗不会露出安卓包入口
 4. 需要踢掉过旧安装包时，抬高 `minSupported`（低于该版本每次冷启动强提醒，可关但下次仍弹）。仅抬 build、name 不变时一般不用动。
-5. 打 GitHub Release（附各平台安装包，如有）；tag 建议与 name 对齐（如 `v0.1.0`）。
+5. 打 GitHub Release（附各平台安装包，如有）；上游 tag 与 name 对齐（如 `v0.1.0`），本 fork tag 包含 build（如 `v0.1.0+2`）。
    - **Android 文件名规范**（`s1er-<name>+<build>-android-<variant>.apk`）：
 
      | 文件后缀 | 含义 |
