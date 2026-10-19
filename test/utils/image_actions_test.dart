@@ -66,6 +66,9 @@ void main() {
         _harness(
           _menuLauncher(
             const ImageActionsSpec(fullUrl: _url, fileName: 'photo.png'),
+            canDownload: true,
+            canShare: true,
+            canCopyImage: true,
           ),
         ),
       );

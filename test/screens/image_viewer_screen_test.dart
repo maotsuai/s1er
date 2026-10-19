@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:io' show Platform;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -462,9 +463,10 @@ void main() {
       await tester.longPress(find.byType(InteractiveViewer));
       await tester.pumpAndSettle();
 
-      expect(find.text('下载'), findsOneWidget);
-      expect(find.text('分享'), findsOneWidget);
-      expect(find.text('复制图片'), findsOneWidget);
+      final platformActions = Platform.isLinux ? findsNothing : findsOneWidget;
+      expect(find.text('下载'), platformActions);
+      expect(find.text('分享'), platformActions);
+      expect(find.text('复制图片'), platformActions);
       expect(find.text('复制链接'), findsOneWidget);
       expect(find.text('图片信息'), findsOneWidget);
     });

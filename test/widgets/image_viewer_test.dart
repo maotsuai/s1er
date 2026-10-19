@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -491,9 +492,10 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    expect(find.text('下载'), findsOneWidget);
-    expect(find.text('分享'), findsOneWidget);
-    expect(find.text('复制图片'), findsOneWidget);
+    final platformActions = Platform.isLinux ? findsNothing : findsOneWidget;
+    expect(find.text('下载'), platformActions);
+    expect(find.text('分享'), platformActions);
+    expect(find.text('复制图片'), platformActions);
     expect(find.text('复制链接'), findsOneWidget);
     expect(find.text('图片信息'), findsOneWidget);
   });
