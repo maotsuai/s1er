@@ -211,6 +211,13 @@ class S1BackupService {
       }
       if (payload.settings != null) {
         final appSettings = S1BackupSettingsMapper.toApp(payload.settings!);
+        if (replaceCollections) {
+          for (final key in _exportSettingKeys) {
+            if (!appSettings.containsKey(key)) {
+              await _local.db.setSetting(key, null);
+            }
+          }
+        }
         for (final entry in appSettings.entries) {
           await _local.db.setSetting(entry.key, entry.value);
           settingsApplied++;

@@ -230,6 +230,23 @@ void main() {
     expect(local.settings.get<Object>(WebDavSyncService.baselineKey), baseline);
   });
 
+  test('removed optional settings do not reappear on the next sync', () async {
+    await local.settings.putAsync('forumSplitListPaneWidth', 600.0);
+    await sync();
+    final remote = S1BackupCodec.decode(cloud!);
+    remote.settings!.remove('forum_split_list_pane_width');
+    cloud = S1BackupCodec.encode(remote);
+    revision++;
+    await sync();
+    expect(local.settings.get<Object>('forumSplitListPaneWidth'), isNull);
+    await sync();
+    expect(
+        S1BackupCodec.decode(cloud!)
+            .settings!
+            .containsKey('forum_split_list_pane_width'),
+        isFalse);
+  });
+
   test('invalid archive and missing ETag never upload or modify local data',
       () async {
     await local.settings.putAsync('themeMode', 'light');
