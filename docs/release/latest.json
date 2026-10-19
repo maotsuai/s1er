@@ -1,20 +1,20 @@
 {
-  "latest": "0.10.0",
+  "latest": "0.10.1",
   "minSupported": "0.3.2",
-  "notes": "Beta — 0.10.0：设置中新增 WebDAV 多端同步，支持手动同步与启动自动同步；同步阅读历史、偏好、投票、黑名单和置顶帖，较新的阅读进度会保留",
+  "notes": "Beta — 0.10.1：修复坚果云 WebDAV 因 ETag 格式被误拒绝、无法同步的问题；兼容同步增加上传前与写入后内容校验，冲突或校验失败时保留本机数据",
   "publishedAt": "2026-10-19",
   "channels": {
     "github": "https://github.com/maotsuai/s1er/releases/latest",
-    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.0/s1er-0.10.0%2B15-android-universal.apk",
-    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.0/s1er-0.10.0%2B15-android-arm64-v8a.apk",
-    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.0/s1er-0.10.0%2B15-android-armeabi-v7a.apk",
-    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.10.0/s1er-0.10.0%2B15-android-x86_64.apk",
+    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-universal.apk",
+    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-arm64-v8a.apk",
+    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-armeabi-v7a.apk",
+    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-android-x86_64.apk",
     "androidNetdisk": null,
     "netdiskHint": null,
-    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.10.0/s1er-0.10.0%2B15-windows-x64.zip",
+    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.10.1/s1er-0.10.1%2B16-windows-x64.zip",
     "linux": null,
     "macos": null,
-    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.10.0",
+    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.10.1",
     "play": null
   }
 }
