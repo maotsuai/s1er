@@ -50,7 +50,7 @@ jobs:
           - target: android
             os: ubuntu-latest
           - target: windows
-            os: windows-latest
+            os: windows-2022
           - target: web
             os: ubuntu-latest
           - target: ios
@@ -142,8 +142,17 @@ jobs:
               $badging = & $aapt.FullName dump badging $apk.FullName
               if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK version' }
               $package = ($badging | Select-String '^package:').Line
-              if ($package -notmatch "versionName='$([regex]::Escape($name))'" -or $package -notmatch "versionCode='$build'") {
-                throw "APK version mismatch: $($apk.Name)"
+              # Flutter split-per-ABI 的 versionCode = ABI 编号 * 1000 + build。
+              $abiOffset = switch -Wildcard ($apk.Name) {
+                '*-android-armeabi-v7a.apk' { 1000 }
+                '*-android-arm64-v8a.apk' { 2000 }
+                '*-android-x86_64.apk' { 4000 }
+                '*-android-universal.apk' { 0 }
+                default { throw "Unknown APK ABI: $($apk.Name)" }
+              }
+              $expectedCode = $abiOffset + [int]$build
+              if ($package -notmatch "versionName='$([regex]::Escape($name))'" -or $package -notmatch "versionCode='$expectedCode'") {
+                throw "APK version mismatch: $($apk.Name); expected $name / $expectedCode; got $package"
               }
             }
           } else {

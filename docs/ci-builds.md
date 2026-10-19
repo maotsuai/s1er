@@ -2,6 +2,8 @@
 
 默认 [Build workflow](../.github/workflows/build.yml) 在 `main` 推送、PR 和手动 `workflow_dispatch` 时运行。先通过 analyze、全量测试、M3 审计，再并行构建 Android、Windows、Web、iOS。Flutter 固定为 `3.47.5`，升级时同步检查 `pubspec.lock`。
 
+Windows 固定 `windows-2022`（VS 2022），规避当前 `gal` 使用的 experimental coroutine 与 VS 2026 的编译不兼容。Android 二进制校验遵循 Flutter 分包规则：universal 为 `build`，armeabi-v7a / arm64-v8a / x86_64 分别为 `1000 / 2000 / 4000 + build`。
+
 主分支构建全部成功后，成品自动发布到本仓库的 **Releases**，tag 为 `v<pubspec name>`，例如 `v0.10.0`。PR 只验证构建，不发布 Release。Actions Artifacts 作为任务间传递与下载备份，保留 14 天。
 
 | 平台 | 内容 |
