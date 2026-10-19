@@ -68,10 +68,15 @@ class EnvConfig {
   );
 
   /// 应用升级清单 URL（默认 jsDelivr CDN latest.json）
+  static const String updateRepository = String.fromEnvironment(
+    'UPDATE_REPOSITORY',
+    defaultValue: 'Shirolin/s1er',
+  );
+
   static const String updateManifestUrl = String.fromEnvironment(
     'UPDATE_MANIFEST_URL',
     defaultValue:
-        'https://cdn.jsdelivr.net/gh/Shirolin/s1er@main/docs/release/latest.json',
+        'https://cdn.jsdelivr.net/gh/$updateRepository@main/docs/release/latest.json',
   );
 
   /// 分发渠道：`github`（默认）或 `play`（上架包 CTA 优先 Play）

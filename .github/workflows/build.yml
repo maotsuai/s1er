@@ -15,6 +15,9 @@ concurrency:
 
 env:
   FLUTTER_VERSION: '3.47.5'
+  TZ: Asia/Singapore
+  S1_UPDATE_REPOSITORY: ${{ github.repository }}
+  S1_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
 
 jobs:
   checks:
@@ -29,6 +32,8 @@ jobs:
           channel: stable
           cache: true
       - run: flutter pub get
+      - name: Release helper regression tests
+        run: pwsh -File scripts/test_release.ps1
       - run: flutter analyze
       - run: flutter test --reporter expanded
       - run: dart run scripts/audit_m3.dart --fail-on-error
@@ -61,13 +66,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
           cache: true
       - run: flutter pub get
-      - run: flutter clean
 
       # 可选：配置这四个 repository secrets 后，CI 使用正式 Android 签名。
       # PR 来自 fork 时 secrets 不可用，安全回退到 CI 调试证书。
@@ -90,7 +95,7 @@ jobs:
               if any(not os.environ.get(key) for key in keys):
                   raise SystemExit('Android signing secrets are incomplete')
               key_file = Path(os.environ['RUNNER_TEMP']) / 's1er-release.jks'
-              key_file.write_bytes(base64.b64decode(encoded, validate=True))
+              key_file.write_bytes(base64.b64decode(''.join(encoded.split()), validate=True))
               # Java Properties escapes preserve arbitrary password characters.
               def escape(value):
                   data = value.encode('utf-16-be')
@@ -109,53 +114,53 @@ jobs:
               print('Android CI artifacts use the debug signing certificate.')
           PY
 
-      - name: Build Android APKs
-        if: matrix.target == 'android'
-        env:
-          S1_CI_BUILD: 'true'
-        run: |
-          mkdir -p artifacts
-          flutter build apk --release
-          cp build/app/outputs/flutter-apk/app-release.apk artifacts/s1er-android-universal.apk
-          flutter build apk --release --split-per-abi
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk artifacts/s1er-android-arm64-v8a.apk
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk artifacts/s1er-android-armeabi-v7a.apk
-          cp build/app/outputs/flutter-apk/app-x86_64-release.apk artifacts/s1er-android-x86_64.apk
-
-      - name: Build Windows
-        if: matrix.target == 'windows'
-        run: flutter build windows --release
-      - name: Package Windows
-        if: matrix.target == 'windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force artifacts | Out-Null
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath artifacts/s1er-windows-x64.zip
-
-      - name: Build Web
-        if: matrix.target == 'web'
-        run: |
-          flutter build web --release
-          mkdir -p artifacts
-          (cd build/web && zip -qr ../../artifacts/s1er-web.zip .)
-
       - name: iOS Info.plist regression tests
         if: matrix.target == 'ios'
         run: flutter test test/ios_info_plist_test.dart --reporter expanded
-      - name: Build iOS without codesigning
-        if: matrix.target == 'ios'
+
+      - name: Build with release helper
+        shell: pwsh
+        env:
+          S1_CI_BUILD: 'true'
+          S1_BUILD_PLATFORM: ${{ matrix.target }}
         run: |
-          flutter build ios --release --no-codesign
-          mkdir -p artifacts/Payload
-          cp -R build/ios/iphoneos/Runner.app artifacts/Payload/
-          (cd artifacts && zip -qry s1er-ios-unsigned.ipa Payload)
-          rm -rf artifacts/Payload
+          pwsh -File scripts/release.ps1 build -Platform $env:S1_BUILD_PLATFORM -Repository $env:GITHUB_REPOSITORY
+
+      - name: Verify mobile binary versions
+        if: matrix.target == 'android' || matrix.target == 'ios'
+        shell: pwsh
+        env:
+          S1_BUILD_PLATFORM: ${{ matrix.target }}
+        run: |
+          $raw = [regex]::Match((Get-Content pubspec.yaml -Raw), '(?m)^version:\s*(\d+\.\d+\.\d+)\+(\d+)').Groups
+          $name = $raw[1].Value
+          $build = $raw[2].Value
+          if ($env:S1_BUILD_PLATFORM -eq 'android') {
+            $aapt = Get-ChildItem "$env:ANDROID_HOME/build-tools" -Recurse -Filter aapt | Select-Object -Last 1
+            if (-not $aapt) { throw 'Android aapt not found' }
+            foreach ($apk in Get-ChildItem dist/*.apk) {
+              $badging = & $aapt.FullName dump badging $apk.FullName
+              if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK version' }
+              $package = ($badging | Select-String '^package:').Line
+              if ($package -notmatch "versionName='$([regex]::Escape($name))'" -or $package -notmatch "versionCode='$build'") {
+                throw "APK version mismatch: $($apk.Name)"
+              }
+            }
+          } else {
+            $plist = 'build/ios/iphoneos/Runner.app/Info.plist'
+            $actualName = & /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' $plist
+            $actualBuild = & /usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' $plist
+            if ($actualName -ne $name -or $actualBuild -ne $build) { throw 'iOS binary version mismatch' }
+          }
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: s1er-${{ matrix.target }}-${{ github.sha }}
-          path: artifacts/*
+          path: |
+            dist/*.apk
+            dist/*.zip
+            dist/*.ipa
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
@@ -164,3 +169,60 @@ jobs:
         if: always() && matrix.target == 'android'
         run: |
           rm -f android/key.properties "$RUNNER_TEMP/s1er-release.jks"
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: s1er-*-${{ github.sha }}
+          path: dist
+          merge-multiple: true
+      - name: Create draft and upload all packages
+        shell: pwsh
+        run: |
+          $version = [regex]::Match((Get-Content pubspec.yaml -Raw), '(?m)^version:\s*(\d+\.\d+\.\d+\+\d+)').Groups[1].Value
+          $expected = @('android-universal.apk', 'android-arm64-v8a.apk', 'android-armeabi-v7a.apk', 'android-x86_64.apk', 'windows-x64.zip', 'web.zip', 'ios-unsigned.ipa')
+          foreach ($suffix in $expected) {
+            $file = Get-Item "dist/s1er-$version-$suffix"
+            if ($file.Length -eq 0) { throw "Empty package: $suffix" }
+          }
+          pwsh -File scripts/release.ps1 create -Repository $env:GITHUB_REPOSITORY -TargetCommit $env:GITHUB_SHA -NoOpen -Draft
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed' }
+          pwsh -File scripts/release.ps1 upload -Repository $env:GITHUB_REPOSITORY -TargetCommit $env:GITHUB_SHA -NoOpen
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
+      - name: Generate manifest and publish Release
+        shell: pwsh
+        run: |
+          $name = [regex]::Match((Get-Content pubspec.yaml -Raw), '(?m)^version:\s*(\d+\.\d+\.\d+)').Groups[1].Value
+          $catalog = Get-Content assets/changelog/whats_new.json -Raw | ConvertFrom-Json
+          $entry = $catalog.entries | Where-Object version -eq $name | Select-Object -First 1
+          if (-not $entry) { throw 'Missing current version in whats_new.json' }
+          $notes = "Beta — ${name}：" + (($entry.highlights | Select-Object -First 2) -join '；')
+          pwsh -File scripts/release.ps1 manifest -Repository $env:GITHUB_REPOSITORY -ManifestNotes $notes
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest generation failed' }
+          gh release upload "v$name" docs/release/latest.json --repo $env:GITHUB_REPOSITORY --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Manifest upload failed' }
+          gh release edit "v$name" --repo $env:GITHUB_REPOSITORY --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
+      - name: Commit generated manifest
+        shell: bash
+        run: |
+          if ! git diff --quiet -- docs/release/latest.json; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add docs/release/latest.json
+            git commit -m 'chore(release): update generated manifest [skip ci]'
+            git push origin HEAD:main
+          fi

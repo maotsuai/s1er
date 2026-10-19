@@ -5,6 +5,19 @@ All notable changes to S1er will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-10-19
+
+### Added
+
+- **WebDAV 多端同步**：复用 L1 ZIP 备份，支持手动同步和每次冷启动自动同步；合并设置、阅读历史、投票、黑名单与置顶帖，传播删除并保留较新阅读进度。
+- **自动签到**：设置中可开启启动签到，等待已有登录会话恢复；同账号当日成功后跳过，失败不连续重试。
+- **云端构建与发布**：统一 Build workflow 构建 Android 四种 APK、Windows、Web 和未签名 iOS IPA，成功后自动上传到本 fork 的 GitHub Release。
+
+### Fixed
+
+- WebDAV 同步采用强 ETag 条件写入，阻止多端并发覆盖；损坏文件、超时和认证失败均保留本机数据，凭据仅存本机安全存储。
+- 图片操作菜单的自动化测试兼容 Linux runner 的平台能力差异。
+
 ## [0.9.0] - 2026-10-16
 
 ### Added

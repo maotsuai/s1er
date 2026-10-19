@@ -37,6 +37,13 @@ param(
     [string]$BumpName,
     [switch]$SkipApk,
     [switch]$SkipWindows,
+    [ValidateSet('all', 'android', 'windows', 'web', 'ios')]
+    [string]$Platform = 'all',
+    [string]$Repository,
+    [string]$TargetCommit,
+    [string]$ManifestNotes,
+    [switch]$NoOpen,
+    [switch]$Draft,
     [switch]$DryRun
 )
 
@@ -48,7 +55,18 @@ $Pubspec = Join-Path $Root 'pubspec.yaml'
 $Changelog = Join-Path $Root 'CHANGELOG.md'
 $Manifest = Join-Path $Root 'docs\release\latest.json'
 $Dist = Join-Path $Root 'dist'
-$RepoSlug = 'Shirolin/s1er'
+$RepoSlug = $Repository
+if (-not $RepoSlug) { $RepoSlug = $env:GITHUB_REPOSITORY }
+if (-not $RepoSlug) {
+    $origin = & git remote get-url origin
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot identify origin; pass -Repository owner/name' }
+    if ($origin -match 'github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$') {
+        $RepoSlug = $Matches[1]
+    }
+}
+if ($RepoSlug -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
+    throw 'Repository must be a GitHub owner/name slug'
+}
 
 function Get-PubspecVersion {
     # 显式按 UTF-8 读取：PS 5.1 的 Get-Content 默认按系统 ANSI 解码无 BOM 文件，会把非 ASCII 字节读坏
@@ -94,6 +112,8 @@ function Get-ArtifactPaths($v) {
         ApkArmeabi = Join-Path $Dist "s1er-$label-android-armeabi-v7a.apk"
         ApkX64     = Join-Path $Dist "s1er-$label-android-x86_64.apk"
         Zip        = Join-Path $Dist "s1er-$label-windows-x64.zip"
+        Web        = Join-Path $Dist "s1er-$label-web.zip"
+        Ios        = Join-Path $Dist "s1er-$label-ios-unsigned.ipa"
         Notes      = Join-Path $Dist "release-notes-$($v.Tag).md"
     }
 }
@@ -174,6 +194,14 @@ function Step-BumpName {
 }
 
 function Invoke-FlutterBuild([string[]]$FlutterArgs) {
+    if ($FlutterArgs[0] -eq 'build') {
+        if ($env:S1_UPDATE_REPOSITORY) {
+            $FlutterArgs += "--dart-define=UPDATE_REPOSITORY=$($env:S1_UPDATE_REPOSITORY)"
+        }
+        if ($env:S1_UPDATE_MANIFEST_URL) {
+            $FlutterArgs += "--dart-define=UPDATE_MANIFEST_URL=$($env:S1_UPDATE_MANIFEST_URL)"
+        }
+    }
     Write-Host ("> flutter " + ($FlutterArgs -join ' ')) -ForegroundColor DarkCyan
     if ($DryRun) { return }
     & flutter $FlutterArgs
@@ -191,7 +219,7 @@ function Step-Build {
     Invoke-FlutterBuild @('clean')
     Invoke-FlutterBuild @('pub', 'get')
 
-    if (-not $SkipApk) {
+    if (-not $SkipApk -and $Platform -in @('all', 'android')) {
         # 1) Per-ABI splits (smaller downloads)
         Write-Host "`n[build] Android per-ABI APKs (--split-per-abi)..." -ForegroundColor Cyan
         Invoke-FlutterBuild @(
@@ -226,7 +254,7 @@ function Step-Build {
         }
     }
 
-    if (-not $SkipWindows) {
+    if (-not $SkipWindows -and $Platform -in @('all', 'windows')) {
         Write-Host "`n[build] Windows Release..." -ForegroundColor Cyan
         Invoke-FlutterBuild @('build', 'windows', '--release')
         $winDir = Join-Path $Root 'build\windows\x64\runner\Release'
@@ -238,7 +266,27 @@ function Step-Build {
         }
     }
 
-    Write-Host "`nBuild done. Artifacts stay local under dist\ - NO upload yet." -ForegroundColor Green
+    if ($Platform -eq 'web') {
+        Invoke-FlutterBuild @('build', 'web', '--release')
+        Compress-Archive -Path (Join-Path $Root 'build/web/*') -DestinationPath $arts.Web -Force
+    }
+    if ($Platform -eq 'ios') {
+        Invoke-FlutterBuild @('build', 'ios', '--release', '--no-codesign')
+        # 用 zip 保留 framework 符号链接，供重新签名工具使用。
+        $payload = Join-Path $Dist 'Payload'
+        New-Item -ItemType Directory -Force -Path $payload | Out-Null
+        & /bin/cp -R (Join-Path $Root 'build/ios/iphoneos/Runner.app') $payload
+        if ($LASTEXITCODE -ne 0) { throw 'Cannot stage iOS Payload' }
+        Push-Location $Dist
+        try {
+            & zip -qry $arts.Ios Payload
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot package unsigned iOS IPA' }
+        } finally {
+            Pop-Location
+            Remove-Item $payload -Recurse -Force
+        }
+    }
+    Write-Host "`nBuild done. Artifacts under dist/ - NO upload yet." -ForegroundColor Green
     Write-Host "Next: .\scripts\release.ps1 create   (then upload in browser)" -ForegroundColor Yellow
     Step-Status
 }
@@ -298,6 +346,9 @@ $updates
 ### 其它
 
 - Windows：``$(Split-Path $arts.Zip -Leaf)``（解压后运行 ``s1er.exe``）
+- Web：``$(Split-Path $arts.Web -Leaf)``（静态站点 ZIP，论坛功能需 CORS 代理）
+- iOS：``$(Split-Path $arts.Ios -Leaf)``（未签名，需个人/开发者证书重新签名后安装）
+- Android 未配置自有签名时使用 CI 调试证书，不能覆盖安装其他证书签名的包。
 
 第三方 Stage1st 客户端；详见 CHANGELOG / README。
 "@
@@ -323,15 +374,38 @@ function Step-Create {
     # （如 "release not found"），需临时降级后靠 $LASTEXITCODE 判断 release 是否已存在
     $oldEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $null = & gh release view $v.Tag 2>$null
+    $null = & gh release view $v.Tag --repo $RepoSlug 2>$null
     $releaseExists = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $oldEAP
     if ($releaseExists) {
+        if ($TargetCommit) {
+            $release = & gh release view $v.Tag --repo $RepoSlug --json isDraft,targetCommitish | ConvertFrom-Json
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot verify existing release' }
+            if ($release.isDraft) {
+                # Draft 公开前可能还没有实际 git tag，使用创建时锁定的 commit。
+                $sha = $release.targetCommitish
+            } else {
+                $existing = & gh api "repos/$RepoSlug/git/ref/tags/$($v.Tag)" | ConvertFrom-Json
+                if ($LASTEXITCODE -ne 0) { throw 'Cannot verify existing release tag' }
+                $sha = $existing.object.sha
+                if ($existing.object.type -eq 'tag') {
+                    $tagObject = & gh api "repos/$RepoSlug/git/tags/$sha" | ConvertFrom-Json
+                    if ($LASTEXITCODE -ne 0) { throw 'Cannot resolve annotated release tag' }
+                    $sha = $tagObject.object.sha
+                }
+            }
+            if ($sha -ne $TargetCommit) {
+                throw "Release $($v.Tag) belongs to another commit. Bump pubspec name/build before publishing."
+            }
+        }
         Write-Host "Release $($v.Tag) already exists." -ForegroundColor Yellow
     } else {
         Write-Host "Creating Release $($v.Tag) (notes only, no assets)..." -ForegroundColor Cyan
         if (-not $DryRun) {
-            gh release create $v.Tag --title "S1er $($v.Name)" --notes-file $arts.Notes --latest
+            $ghArgs = @('release', 'create', $v.Tag, '--repo', $RepoSlug, '--title', "S1er $($v.Name)", '--notes-file', $arts.Notes)
+            if ($Draft) { $ghArgs += '--draft' } else { $ghArgs += '--latest' }
+            if ($TargetCommit) { $ghArgs += @('--target', $TargetCommit) }
+            & gh @ghArgs
             if ($LASTEXITCODE -ne 0) { throw "gh release create failed ($LASTEXITCODE)" }
         }
     }
@@ -342,7 +416,7 @@ function Step-Create {
     foreach ($p in @(Get-AndroidArtifactList $arts) + @($arts.Zip)) {
         if (Test-Path $p) { Write-Host "  - $p" }
     }
-    if (-not $DryRun) {
+    if (-not $DryRun -and -not $NoOpen) {
         Start-Process $url
         if (Test-Path $Dist) { Start-Process explorer.exe $Dist }
     }
@@ -353,10 +427,11 @@ function Step-Upload {
     $v = Get-PubspecVersion
     $arts = Get-ArtifactPaths $v
     $files = @()
-    foreach ($p in @(Get-AndroidArtifactList $arts) + @($arts.Zip)) {
+    foreach ($p in @(Get-AndroidArtifactList $arts) + @($arts.Zip, $arts.Web, $arts.Ios)) {
         if (Test-Path $p) { $files += $p }
     }
     if ($files.Count -eq 0) { throw 'No dist artifacts. Run: .\scripts\release.ps1 build' }
+    if ($TargetCommit) { Step-Create }
 
     Write-Host "CLI upload can be VERY slow (several APKs). Prefer browser after 'create'." -ForegroundColor Yellow
     Write-Host "Uploading $($files.Count) file(s)..." -ForegroundColor Cyan
@@ -365,7 +440,7 @@ function Step-Upload {
     # Ensure release exists (same EAP guard as Step-Create)
     $oldEAP = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $null = & gh release view $v.Tag 2>$null
+    $null = & gh release view $v.Tag --repo $RepoSlug 2>$null
     $releaseExists = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $oldEAP
     if (-not $releaseExists) {
@@ -373,7 +448,7 @@ function Step-Upload {
     }
     foreach ($f in $files) {
         Write-Host "-> $(Split-Path $f -Leaf) ..." -ForegroundColor DarkCyan
-        gh release upload $v.Tag $f --clobber
+        gh release upload $v.Tag $f --repo $RepoSlug --clobber
         if ($LASTEXITCODE -ne 0) { throw "upload failed for $f ($LASTEXITCODE)" }
         Write-Host "   OK" -ForegroundColor Green
     }
@@ -433,6 +508,7 @@ function Step-Manifest {
     $json.channels.androidArmeabiV7aApk = $apkArmeabiUrl
     $json.channels.androidX8664Apk = $apkX64Url
     $json.channels.windows = $zipUrl
+    $json.channels.ios = "https://github.com/$RepoSlug/releases/tag/$($v.Tag)"
     # Preserve netdisk fields if already set (manual); ensure keys exist.
     if (-not ($json.channels.PSObject.Properties.Name -contains 'androidNetdisk')) {
         $json.channels | Add-Member -NotePropertyName androidNetdisk -NotePropertyValue $null
@@ -440,6 +516,12 @@ function Step-Manifest {
     if (-not ($json.channels.PSObject.Properties.Name -contains 'netdiskHint')) {
         $json.channels | Add-Member -NotePropertyName netdiskHint -NotePropertyValue $null
     }
+    if ($RepoSlug -ine 'Shirolin/s1er') {
+        # 不把上游版本的网盘链接带进 fork 的新版本清单。
+        $json.channels.androidNetdisk = $null
+        $json.channels.netdiskHint = $null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ManifestNotes)) { $json.notes = $ManifestNotes }
 
     $out = $json | ConvertTo-Json -Depth 6
     if ($DryRun) {

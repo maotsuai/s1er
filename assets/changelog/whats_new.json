@@ -1,6 +1,16 @@
 {
   "entries": [
     {
+      "version": "0.10.0",
+      "date": "2026-10-19",
+      "highlights": [
+        "设置中新增 WebDAV 多端同步，支持手动同步与启动自动同步",
+        "同步阅读历史、偏好、投票、黑名单和置顶帖，较新的阅读进度会保留",
+        "设置中可开启自动签到，登录恢复后执行，当天成功后跳过",
+        "GitHub Release 提供 Android、Windows、Web 和未签名 iOS 安装包"
+      ]
+    },
+    {
       "version": "0.9.0",
       "date": "2026-10-16",
       "highlights": [

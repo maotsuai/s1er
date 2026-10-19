@@ -193,6 +193,7 @@ flutter run -d chrome --dart-define=TALKER_LOG_LEVEL=all --dart-define=TALKER_MA
 | `SEND_TIMEOUT` | int | `30` | Dio 发送超时（秒） |
 | `IMAGE_UPLOAD_TIMEOUT` | int | `120` | 插图上传 send/receive 超时（秒；外链 `/ext-upload` 与论坛 `misc.php` swfupload 同上限） |
 | `UPDATE_MANIFEST_URL` | String | jsDelivr CDN `docs/release/latest.json` | 应用升级清单主 URL（并发备用 GitHub raw） |
+| `UPDATE_REPOSITORY` | String | `Shirolin/s1er` | 升级清单备用 raw/CDN 的仓库；fork CI 注入当前仓库，并将主 URL 指向 Release 的 `latest.json` |
 | `DISTRIBUTION` | String | `github` | 分发渠道：`github` / `play`（影响升级 CTA 链接） |
 | `UPDATE_ALLOW_LOCAL_HOST` | bool | `false` | **仅 debug/profile 构建**：允许升级下载走本地 http 环回主机（`127.0.0.1`/`localhost`），用于本地端到端测试覆盖更新；release 恒不生效 |
 | `SENTRY_DSN` | String | 空 | 非空时启用 Sentry；详见 `docs/sentry-setup.md` |

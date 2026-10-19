@@ -1,5 +1,9 @@
 # 应用升级与版本管理
 
+本 fork 的默认 GitHub Actions `Build` 已接入完整发布：预先修改 `pubspec.yaml`、CHANGELOG 与新功能说明后推送 `main`，云端通过测试与审计，再调用 `pwsh -File scripts/release.ps1 build -Platform ...` 构建 Android、Windows、Web 与 iOS，校验二进制版本，上传 draft Release，执行 `manifest` 并公开 Release。详见 [云端构建与发布](../ci-builds.md)。本地无需构建安装包。
+
+发版脚本通过 `-Repository owner/name` 显式指定仓库；未指定时从 `GITHUB_REPOSITORY` 或本地 `origin` 推断，避免误发到上游。`create -NoOpen -Draft -TargetCommit SHA` 支持 CI，`build -Platform android|windows|web|ios` 为分平台构建入口。
+
 客户端通过 `EnvConfig.updateManifestUrl`（默认 jsDelivr CDN：`cdn.jsdelivr.net/gh/Shirolin/s1er@main/docs/release/latest.json`，与本目录 [`latest.json`](latest.json) 同源）拉取版本信息，用于应用内升级提醒。
 
 ## 版本号格式（`pubspec.yaml`）

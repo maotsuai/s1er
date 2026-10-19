@@ -38,11 +38,11 @@ class UpdateCheckService {
 
   /// 国内可达的 jsDelivr 镜像（与 raw 同源文件）。
   static const String jsDelivrManifestUrl =
-      'https://cdn.jsdelivr.net/gh/Shirolin/s1er@main/docs/release/latest.json';
+      'https://cdn.jsdelivr.net/gh/${EnvConfig.updateRepository}@main/docs/release/latest.json';
 
   /// 备选 GitHub raw 链接。
   static const String rawGithubManifestUrl =
-      'https://raw.githubusercontent.com/Shirolin/s1er/main/docs/release/latest.json';
+      'https://raw.githubusercontent.com/${EnvConfig.updateRepository}/main/docs/release/latest.json';
 
   final Dio _dio;
   final List<String> _manifestUrls;
