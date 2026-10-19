@@ -11,6 +11,7 @@ import 'models/edit_post_route_extra.dart';
 import 'providers/reading_history_coordinator.dart';
 import 'providers/pinned_reply_sync_coordinator.dart';
 import 'providers/settings_provider.dart';
+import 'providers/startup_automation_provider.dart';
 import 'providers/update_check_provider.dart';
 import 'providers/whats_new_provider.dart';
 import 'screens/home_screen.dart';
@@ -257,6 +258,7 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
     ref.watch(updateCheckCoordinatorProvider);
     ref.watch(whatsNewCoordinatorProvider);
     ref.watch(pinnedReplySyncCoordinatorProvider);
+    ref.watch(startupAutomationCoordinatorProvider);
 
     final themeModeStr = ref.watch(settingsProvider.select((s) => s.themeMode));
     final themeColor = ref.watch(settingsProvider.select((s) => s.themeColor));

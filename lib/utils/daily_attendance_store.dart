@@ -4,6 +4,8 @@
 abstract class DailyAttendanceStore {
   static const settingsKey = 'daily_attendance_signed';
 
+  static String settingsKeyFor(String uid) => '${settingsKey}_$uid';
+
   /// `YYYY-MM-DD`（本地时区日历日）。
   static String formatDate(DateTime dateTime) {
     final local = dateTime.toLocal();

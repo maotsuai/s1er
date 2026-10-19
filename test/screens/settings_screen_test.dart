@@ -6,6 +6,8 @@ import 'package:s1er/theme/app_theme.dart';
 import 'package:s1er/providers/settings_provider.dart';
 import 'package:s1er/providers/talker_provider.dart';
 import 'package:s1er/screens/settings_screen.dart';
+import 'package:s1er/providers/automation_settings_provider.dart';
+import 'package:s1er/providers/webdav_sync_provider.dart';
 
 void main() {
   testWidgets('SettingsScreen displays all settings sections', (tester) async {
@@ -15,6 +17,12 @@ void main() {
           settingsProvider.overrideWith(
             () => SettingsNotifier(initial: const AppSettings()),
           ),
+          automationSettingsProvider.overrideWith(
+            () =>
+                AutomationSettingsNotifier(initial: const AutomationSettings()),
+          ),
+          webDavConfigProvider.overrideWith(_NoConnection.new),
+          webDavSyncProvider.overrideWith(_IdleSync.new),
           packageInfoProvider.overrideWith(
             (_) async => PackageInfo(
               appName: 'S1',
@@ -38,6 +46,9 @@ void main() {
     expect(find.text('隐藏置顶帖'), findsOneWidget);
     expect(find.text('已屏蔽版块'), findsOneWidget);
     expect(find.text('数据管理'), findsOneWidget);
+    expect(find.text('同步与自动化'), findsOneWidget);
+    expect(find.text('启动时自动同步'), findsOneWidget);
+    expect(find.text('自动签到'), findsOneWidget);
     expect(find.text('清除图片缓存'), findsOneWidget);
     expect(find.text('导出备份'), findsOneWidget);
     expect(find.text('导入备份'), findsOneWidget);
@@ -49,4 +60,14 @@ void main() {
     expect(find.text('更新日志'), findsOneWidget);
     expect(find.text('检查更新'), findsOneWidget);
   });
+}
+
+class _NoConnection extends WebDavConfigNotifier {
+  @override
+  Future<WebDavConfig?> build() async => null;
+}
+
+class _IdleSync extends WebDavSyncNotifier {
+  @override
+  WebDavSyncState build() => const WebDavSyncState();
 }

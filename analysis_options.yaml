@@ -1,10 +1,20 @@
 include: package:flutter_lints/flutter.yaml
 
+formatter:
+  trailing_commas: preserve
+
 analyzer:
   exclude:
     - 'scripts/**'
     - 'tool/**'
     - 'dist/**'
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
 linter:
   rules:

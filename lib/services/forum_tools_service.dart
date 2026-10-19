@@ -56,7 +56,7 @@ class ForumToolsService {
     }
   }
 
-  /// 用户显式点击后调用；GET 会产生服务端签到写入，失败不自动重试。
+  /// 用户点击或授权自动签到后调用；GET 会写入服务端，失败不自动重试。
   Future<AttendanceResult> dailySign() async {
     final formhash = await _httpClient.requireFormhash();
     if (formhash == null) {

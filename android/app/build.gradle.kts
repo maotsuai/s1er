@@ -10,6 +10,8 @@ plugins {
 // Load signing config
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties()
+// CI 产物默认用 Android 调试证书签名；正式发版仍要求现有 release 密钥。
+val isCiBuild = providers.environmentVariable("S1_CI_BUILD").orNull == "true"
 if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
@@ -43,7 +45,9 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = signingConfigs.getByName(
+                if (isCiBuild && !keystorePropertiesFile.exists()) "debug" else "release"
+            )
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -38,7 +38,7 @@ flutter run -d <device-id>
 - `ios/Podfile` **已入库**（锁定 `platform :ios, '13.0'`，与工程 target 一致；勿删，缺省时 CocoaPods 会赋 15.0 产生警告）；`Pods/` 与 `Podfile.lock` 由首次 `pod install`（`flutter build ios` 自动触发）生成，不入库。
 - `ironpress` 依赖暂指向 git fork（xcframework 兼容性修复，见 AGENTS.md 已知约束）；首次 `flutter pub get` 会拉取该仓库。
 - 真机签名：Xcode → `Runner` → Signing & Capabilities → 勾选 Automatically manage signing 并选择你的 Team。**免费个人 Apple ID 即可**真机安装（工程已是 `CODE_SIGN_STYLE = Automatic`，`DEVELOPMENT_TEAM` 不入库）。
-- **CI**：`.github/workflows/ios-smoke.yml` 在 macOS 上跑 plist 回归测试 + `flutter build ios --no-codesign`，改动 `ios/**`、`lib/**`、`pubspec.*` 的 PR 自动触发——本地没有 Mac 也由它把关工程完整性。
+- **CI**：默认 `.github/workflows/build.yml` 通过分析、测试、M3 审计后，在对应 runner 上构建 Android、Windows、Web 和 iOS；iOS 包含 plist 回归测试与 `flutter build ios --no-codesign`。提交 `main`、PR 或手动触发后可下载构建产物，见 [GitHub Actions 构建](ci-builds.md)。
 
 ### 构建命令
 

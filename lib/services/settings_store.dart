@@ -43,4 +43,14 @@ class SettingsStore {
     _cache[key] = value;
     unawaited(_db.setSetting(key, value));
   }
+
+  /// 用于同步基线等必须确认落盘后才能报告成功的数据。
+  Future<void> putAsync(String key, Object? value) async {
+    await _db.setSetting(key, value);
+    if (value == null) {
+      _cache.remove(key);
+    } else {
+      _cache[key] = value;
+    }
+  }
 }

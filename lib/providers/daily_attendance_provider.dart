@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/attendance_result.dart';
@@ -34,10 +36,19 @@ class DailyAttendanceNotifier extends Notifier<DailyAttendanceState> {
       return const DailyAttendanceState();
     }
 
+    // 请求结果跨页面保留，但到次日要清掉「今日已签到」展示。
+    final now = DateTime.now();
+    final nextDay = DateTime(now.year, now.month, now.day + 1);
+    final reset = Timer(nextDay.difference(now), () {
+      if (ref.mounted) ref.invalidateSelf();
+    });
+    ref.onDispose(reset.cancel);
+
     final store = _trySettingsStore();
     if (store != null &&
         DailyAttendanceStore.matches(
-          raw: store.get(DailyAttendanceStore.settingsKey),
+          raw: store.get(DailyAttendanceStore.settingsKeyFor(uid)) ??
+              store.get(DailyAttendanceStore.settingsKey),
           uid: uid,
           now: DateTime.now(),
         )) {
@@ -61,19 +72,40 @@ class DailyAttendanceNotifier extends Notifier<DailyAttendanceState> {
     }
   }
 
-  /// 用户显式触发；并发点击在提交期间直接忽略。
-  Future<void> sign() async {
+  /// 手动触发或已授权的启动自动签到；并发请求直接忽略。
+  Future<void> sign({bool automatic = false}) async {
     if (state.isSubmitting) return;
+    final auth = ref.read(authStateProvider);
+    final uid = auth.user?.uid.trim() ?? '';
+    if (automatic) {
+      if (!auth.isLoggedIn || uid.isEmpty) return;
+      final store = _trySettingsStore();
+      if (store != null &&
+          DailyAttendanceStore.matches(
+            raw: store.get(DailyAttendanceStore.settingsKeyFor(uid)) ??
+                store.get(DailyAttendanceStore.settingsKey),
+            uid: uid,
+            now: DateTime.now(),
+          )) {
+        return;
+      }
+    }
     state = state.copyWith(isSubmitting: true);
     try {
       final result = await _service.dailySign();
       if (!ref.mounted) return;
+      if ((ref.read(authStateProvider).user?.uid.trim() ?? '') != uid) return;
       if (result.isSignedToday) {
-        _persistSignedToday();
+        await _persistSignedToday(uid);
+      }
+      if (!ref.mounted ||
+          (ref.read(authStateProvider).user?.uid.trim() ?? '') != uid) {
+        return;
       }
       state = DailyAttendanceState(isSubmitting: false, result: result);
     } catch (e) {
       if (!ref.mounted) return;
+      if ((ref.read(authStateProvider).user?.uid.trim() ?? '') != uid) return;
       state = DailyAttendanceState(
         isSubmitting: false,
         result: AttendanceResult(
@@ -84,11 +116,14 @@ class DailyAttendanceNotifier extends Notifier<DailyAttendanceState> {
     }
   }
 
-  void _persistSignedToday() {
-    final uid = ref.read(authStateProvider).user?.uid.trim() ?? '';
+  Future<void> _persistSignedToday(String uid) async {
     if (uid.isEmpty) return;
     final store = _trySettingsStore();
-    store?.put(
+    await store?.putAsync(
+      DailyAttendanceStore.settingsKeyFor(uid),
+      DailyAttendanceStore.payload(uid: uid, now: DateTime.now()),
+    );
+    await store?.putAsync(
       DailyAttendanceStore.settingsKey,
       DailyAttendanceStore.payload(uid: uid, now: DateTime.now()),
     );
@@ -96,6 +131,6 @@ class DailyAttendanceNotifier extends Notifier<DailyAttendanceState> {
 }
 
 final dailyAttendanceProvider =
-    NotifierProvider.autoDispose<DailyAttendanceNotifier, DailyAttendanceState>(
+    NotifierProvider<DailyAttendanceNotifier, DailyAttendanceState>(
   DailyAttendanceNotifier.new,
 );

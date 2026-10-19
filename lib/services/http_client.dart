@@ -288,6 +288,42 @@ class S1HttpClient {
     return _dio.post(url, data: data, options: options);
   }
 
+  /// 外部存储使用独立传输，复用限流与超时，但隔离论坛 Cookie、formhash、
+  /// 代理和日志拦截器。Native 禁止重定向；Web 的重定向由浏览器处理。
+  Future<Response<T>> requestExternal<T>(
+    String url, {
+    required String method,
+    required Map<String, String> headers,
+    Object? data,
+    ResponseType responseType = ResponseType.bytes,
+  }) async {
+    await _enforceRateLimit();
+    final transport = Dio(
+      BaseOptions(
+        connectTimeout:
+            const Duration(seconds: EnvConfig.connectTimeoutSeconds),
+        receiveTimeout:
+            const Duration(seconds: EnvConfig.receiveTimeoutSeconds),
+        sendTimeout: const Duration(seconds: EnvConfig.sendTimeoutSeconds),
+        followRedirects: false,
+      ),
+    );
+    try {
+      return await transport.request<T>(
+        url,
+        data: data,
+        options: Options(
+          method: method,
+          headers: headers,
+          responseType: responseType,
+          validateStatus: (status) => status != null,
+        ),
+      );
+    } finally {
+      transport.close();
+    }
+  }
+
   void updateFormhash(String formhash) {
     if (formhash.isEmpty) return;
     _read(formhashProvider.notifier).update(formhash);

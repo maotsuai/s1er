@@ -1,0 +1,166 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.5'
+
+jobs:
+  checks:
+    name: Analyze, test and M3 audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test --reporter expanded
+      - run: dart run scripts/audit_m3.dart --fail-on-error
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: checks
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: android
+            os: ubuntu-latest
+          - target: windows
+            os: windows-latest
+          - target: web
+            os: ubuntu-latest
+          - target: ios
+            os: macos-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Setup Java
+        if: matrix.target == 'android'
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter clean
+
+      # 可选：配置这四个 repository secrets 后，CI 使用正式 Android 签名。
+      # PR 来自 fork 时 secrets 不可用，安全回退到 CI 调试证书。
+      - name: Prepare Android release signing
+        if: matrix.target == 'android'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          encoded = os.environ.get('KEYSTORE_BASE64', '')
+          if encoded:
+              keys = ['KEY_ALIAS', 'STORE_PASSWORD', 'KEY_PASSWORD']
+              if any(not os.environ.get(key) for key in keys):
+                  raise SystemExit('Android signing secrets are incomplete')
+              key_file = Path(os.environ['RUNNER_TEMP']) / 's1er-release.jks'
+              key_file.write_bytes(base64.b64decode(encoded, validate=True))
+              # Java Properties escapes preserve arbitrary password characters.
+              def escape(value):
+                  data = value.encode('utf-16-be')
+                  return ''.join('\\u' + data[i:i + 2].hex() for i in range(0, len(data), 2))
+              properties = {
+                  'storeFile': str(key_file),
+                  'keyAlias': os.environ['KEY_ALIAS'],
+                  'storePassword': os.environ['STORE_PASSWORD'],
+                  'keyPassword': os.environ['KEY_PASSWORD'],
+              }
+              Path('android/key.properties').write_text(
+                  '\n'.join(key + '=' + escape(value) for key, value in properties.items()),
+                  encoding='ascii',
+              )
+          else:
+              print('Android CI artifacts use the debug signing certificate.')
+          PY
+
+      - name: Build Android APKs
+        if: matrix.target == 'android'
+        env:
+          S1_CI_BUILD: 'true'
+        run: |
+          mkdir -p artifacts
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk artifacts/s1er-android-universal.apk
+          flutter build apk --release --split-per-abi
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk artifacts/s1er-android-arm64-v8a.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk artifacts/s1er-android-armeabi-v7a.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-release.apk artifacts/s1er-android-x86_64.apk
+
+      - name: Build Windows
+        if: matrix.target == 'windows'
+        run: flutter build windows --release
+      - name: Package Windows
+        if: matrix.target == 'windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath artifacts/s1er-windows-x64.zip
+
+      - name: Build Web
+        if: matrix.target == 'web'
+        run: |
+          flutter build web --release
+          mkdir -p artifacts
+          (cd build/web && zip -qr ../../artifacts/s1er-web.zip .)
+
+      - name: iOS Info.plist regression tests
+        if: matrix.target == 'ios'
+        run: flutter test test/ios_info_plist_test.dart --reporter expanded
+      - name: Build iOS without codesigning
+        if: matrix.target == 'ios'
+        run: |
+          flutter build ios --release --no-codesign
+          mkdir -p artifacts/Payload
+          cp -R build/ios/iphoneos/Runner.app artifacts/Payload/
+          (cd artifacts && zip -qry s1er-ios-unsigned.ipa Payload)
+          rm -rf artifacts/Payload
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: s1er-${{ matrix.target }}-${{ github.sha }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Remove Android signing material
+        if: always() && matrix.target == 'android'
+        run: |
+          rm -f android/key.properties "$RUNNER_TEMP/s1er-release.jks"

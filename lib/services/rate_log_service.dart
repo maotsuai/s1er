@@ -26,7 +26,7 @@ class RateLogService {
       );
       final html = response.data as String;
       if (html.length > 32 * 1024) {
-        return compute(_parseRateLogsIsolate, html);
+        return await compute(_parseRateLogsIsolate, html);
       }
       return parseRateLogs(html);
     } catch (_) {

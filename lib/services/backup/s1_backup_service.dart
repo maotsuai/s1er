@@ -191,7 +191,10 @@ class S1BackupService {
     return importPayload(S1BackupCodec.decode(Uint8List.fromList(bytes)));
   }
 
-  Future<S1BackupImportResult> importPayload(S1BackupPayload payload) async {
+  Future<S1BackupImportResult> importPayload(
+    S1BackupPayload payload, {
+    bool replaceCollections = false,
+  }) async {
     await _local.ensureAllLoaded();
     var settingsApplied = 0;
     var historyUpserts = 0;
@@ -199,6 +202,13 @@ class S1BackupService {
     var blacklistUpserts = 0;
 
     await _local.db.transaction(() async {
+      // 同步已在完整快照上完成三方合并；替换集合才能传播删除。
+      // 普通手动导入继续保持 v1 的同键覆盖语义。
+      if (replaceCollections) {
+        await _local.db.delete(_local.db.readingHistories).go();
+        await _local.db.delete(_local.db.pollVotes).go();
+        await _local.db.delete(_local.db.blacklistEntries).go();
+      }
       if (payload.settings != null) {
         final appSettings = S1BackupSettingsMapper.toApp(payload.settings!);
         for (final entry in appSettings.entries) {

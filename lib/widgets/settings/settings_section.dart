@@ -9,6 +9,7 @@ import 'font_settings_section.dart';
 import 'font_size_section.dart';
 import 'post_signature_settings_section.dart';
 import 'share_settings_section.dart';
+import 'sync_settings_section.dart';
 import 'theme_settings_section.dart';
 
 /// 设置页内容：主题、文字、图片与缓存、浏览、分享、小尾巴、黑名单、数据管理与关于。
@@ -34,6 +35,8 @@ class SettingsSection extends StatelessWidget {
         PostSignatureSettingsSection(),
         SizedBox(height: 16),
         BlacklistSettingsSection(),
+        SizedBox(height: 16),
+        SyncSettingsSection(),
         SizedBox(height: 16),
         DataManagementSection(),
         SizedBox(height: 16),
