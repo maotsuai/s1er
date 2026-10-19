@@ -241,10 +241,11 @@ void main() {
     expect(local.settings.get<Object>('forumSplitListPaneWidth'), isNull);
     await sync();
     expect(
-        S1BackupCodec.decode(cloud!)
-            .settings!
-            .containsKey('forum_split_list_pane_width'),
-        isFalse);
+      S1BackupCodec.decode(cloud!)
+          .settings!
+          .containsKey('forum_split_list_pane_width'),
+      isFalse,
+    );
   });
 
   test('invalid archive and missing ETag never upload or modify local data',
