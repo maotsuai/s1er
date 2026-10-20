@@ -33,6 +33,12 @@ void main() {
   var getCalls = 0;
   var requests = <HttpRequest>[];
   String Function(int)? formatEtag;
+  String Function(int)? formatWriteEtag;
+  String Function(int)? formatHeadEtag;
+  var headStatus = 405;
+  var propertyStatus = 405;
+  String? propertyBody;
+  Future<void> Function()? onHead;
   Future<void> Function(int)? onGet;
   Future<void> Function()? onPut;
   Future<void> Function()? afterPut;
@@ -71,6 +77,12 @@ void main() {
         readingHistory: history,
       );
 
+  String properties(String etag) => '<m:multistatus xmlns:m="DAV:"><m:response>'
+      '<m:href>${htmlEscape.convert(config.fileUri.path)}</m:href>'
+      '<m:propstat><m:prop><m:getetag>${htmlEscape.convert(etag)}</m:getetag>'
+      '</m:prop><m:status>HTTP/1.1 200 OK</m:status></m:propstat>'
+      '</m:response></m:multistatus>';
+
   setUp(() async {
     (db, local) = await openTestLocalData();
     backup = S1BackupService(local);
@@ -100,12 +112,20 @@ void main() {
     getCalls = 0;
     requests = [];
     formatEtag = null;
+    formatWriteEtag = null;
+    formatHeadEtag = null;
+    headStatus = 405;
+    propertyStatus = 405;
+    propertyBody = null;
+    onHead = null;
     onGet = null;
     onPut = null;
     afterPut = null;
     server.listen((request) async {
       requests.add(request);
       final response = request.response;
+      String currentEtag() =>
+          (formatWriteEtag ?? formatEtag)?.call(revision) ?? '"$revision"';
       if (request.method == 'GET') {
         getCalls++;
         await onGet?.call(getCalls);
@@ -113,6 +133,9 @@ void main() {
           response.statusCode = failGet;
         } else if (cloud == null) {
           response.statusCode = 404;
+        } else if (request.headers.value('if-match') != null &&
+            request.headers.value('if-match') != currentEtag()) {
+          response.statusCode = 412;
         } else {
           if (!omitEtag) {
             response.headers
@@ -120,6 +143,15 @@ void main() {
           }
           response.add(cloud!);
         }
+      } else if (request.method == 'HEAD') {
+        await onHead?.call();
+        response.statusCode = headStatus;
+        final etag = formatHeadEtag?.call(revision);
+        if (etag != null) response.headers.set('etag', etag);
+      } else if (request.method == 'PROPFIND') {
+        await request.drain<void>();
+        response.statusCode = propertyStatus;
+        if (propertyBody != null) response.write(propertyBody);
       } else if (request.method == 'PUT') {
         putCalls++;
         final data = await request
@@ -127,8 +159,7 @@ void main() {
         await onPut?.call();
         final expected = cloud == null
             ? request.headers.value('if-none-match') == '*'
-            : request.headers.value('if-match') ==
-                (formatEtag?.call(revision) ?? '"$revision"');
+            : request.headers.value('if-match') == currentEtag();
         if (conflict || !expected) {
           response.statusCode = 412;
         } else {
@@ -292,6 +323,139 @@ void main() {
     expect(S1BackupCodec.decode(cloud!).settings!['font_size'], 20);
     expect(putCalls, 2);
     expect(getCalls, 6);
+  });
+
+  test('opaque bare ETag supports base64 punctuation without rewriting it',
+      () async {
+    formatEtag = (value) => '+digest/$value==';
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    await sync();
+    expect(local.settings.get<String>('themeMode'), 'dark');
+    expect(
+      requests.singleWhere((r) => r.method == 'PUT').headers.value('if-match'),
+      '+digest/1==',
+    );
+  });
+
+  test('recovers when GET stops exposing ETag after earlier successful sync',
+      () async {
+    await sync();
+    omitEtag = true;
+    headStatus = 200;
+    formatHeadEtag = (value) => '"$value"';
+    await local.settings.putAsync('themeMode', 'dark');
+    await sync();
+    expect(S1BackupCodec.decode(cloud!).settings!['theme_mode'], 'dark');
+    expect(requests.where((r) => r.method == 'HEAD'), hasLength(1));
+    expect(requests.where((r) => r.method == 'PROPFIND'), isEmpty);
+    expect(
+      requests.where((r) => r.method == 'GET').last.headers.value('if-match'),
+      isNull, // 写后校验不带已过期的上传前 ETag。
+    );
+  });
+
+  test('missing GET and HEAD ETags recover through WebDAV file properties',
+      () async {
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    omitEtag = true;
+    headStatus = 200;
+    propertyStatus = 207;
+    propertyBody = properties('"1"');
+    await sync();
+    expect(local.settings.get<String>('themeMode'), 'dark');
+    final request = requests.singleWhere((r) => r.method == 'PROPFIND');
+    expect(request.headers.value('depth'), '0');
+    expect(request.headers.value('cookie'), isNull);
+    expect(request.headers.value('authorization'), startsWith('Basic '));
+    expect(putCalls, 1);
+    expect(getCalls, 3);
+    expect(
+      requests.singleWhere((r) => r.method == 'PUT').headers.value('if-match'),
+      '"1"',
+    );
+  });
+
+  test('weak download ETag can use a strong file validator from HEAD',
+      () async {
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    formatEtag = (value) => 'W/"$value"';
+    formatWriteEtag = (value) => '"$value"';
+    formatHeadEtag = formatWriteEtag;
+    headStatus = 200;
+    await sync();
+    expect(local.settings.get<String>('themeMode'), 'dark');
+    expect(putCalls, 1);
+    expect(getCalls, 3);
+  });
+
+  test('new HEAD validator cannot authorize uploading a stale download',
+      () async {
+    await sync();
+    final baseline = local.settings.get<Object>(WebDavSyncService.baselineKey);
+    omitEtag = true;
+    headStatus = 200;
+    formatHeadEtag = (value) => '"$value"';
+    final changed = S1BackupCodec.encode(
+      payload(settings: {'theme_mode': 'dark'}),
+    );
+    onHead = () async {
+      cloud = changed;
+      revision++;
+    };
+    putCalls = 0;
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    expect(putCalls, 0);
+    expect(cloud, changed);
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), baseline);
+  });
+
+  test('metadata fallback respects conditional GET when a concurrent edit wins',
+      () async {
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    omitEtag = true;
+    headStatus = 200;
+    formatHeadEtag = (value) => '"$value"';
+    onGet = (count) async {
+      if (count == 2) revision++;
+    };
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    expect(putCalls, 0);
+    expect(requests.last.headers.value('if-match'), '"1"');
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), isNull);
+  });
+
+  test('metadata lookup authentication errors stop without trying other writes',
+      () async {
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    omitEtag = true;
+    headStatus = 401;
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>().having(
+          (e) => e.message,
+          'message',
+          allOf(contains('认证失败'), isNot(contains(config.password))),
+        ),
+      ),
+    );
+    expect(putCalls, 0);
+    expect(requests.where((r) => r.method == 'PROPFIND'), isEmpty);
+  });
+
+  test('oversized or malformed WebDAV properties do not upload or import',
+      () async {
+    cloud = S1BackupCodec.encode(payload(settings: {'theme_mode': 'dark'}));
+    omitEtag = true;
+    propertyStatus = 207;
+    propertyBody = 'x' * (64 * 1024 + 1);
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    propertyBody = '<broken';
+    await expectLater(sync(), throwsA(isA<WebDavSyncException>()));
+    expect(putCalls, 0);
+    expect(local.settings.get<String>('themeMode'), isNot('dark'));
   });
 
   test('bare ETag preflight detects changed content even if ETag is unchanged',

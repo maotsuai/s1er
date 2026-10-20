@@ -29,6 +29,7 @@
 | 框架 | Flutter | >=3.4 |
 | 状态管理 | flutter_riverpod | 3.2.1（临时固定；规避 #4765；Notifier / AsyncNotifier；禁长期依赖 `legacy.dart`） |
 | HTTP 客户端 | dio | ^5.4.0 |
+| WebDAV 文件属性解析 | xml（复用原有间接依赖，显式声明） | ^6.6.1 |
 | 路由 | go_router | ^17.0.0 |
 | 本地结构化存储 | drift / drift_flutter | ^2.34.1 / ^0.3.1 |
 | 图片磁盘缓存 | flutter_cache_manager / cached_network_image | ^3.4.1 / ^3.4.1 |

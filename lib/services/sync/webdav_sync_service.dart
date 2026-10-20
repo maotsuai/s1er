@@ -10,6 +10,7 @@ import '../backup/s1_backup_codec.dart';
 import '../backup/s1_backup_service.dart';
 import '../http_client.dart';
 import 's1_backup_merge.dart';
+import 'webdav_metadata.dart';
 
 class WebDavSyncException implements Exception {
   const WebDavSyncException(this.message);
@@ -46,17 +47,18 @@ class WebDavSyncService {
       var verifyContent = false;
       if (exists) {
         remote = S1BackupCodec.decode(downloaded.bytes!);
-        etag = downloaded.etag?.trim();
-        final strong = etag != null && _strongEtag.hasMatch(etag);
-        // 坚果云等服务返回无引号的 opaque ETag；If-Match 必须保留原值，
-        // 不能擅自加引号或去掉弱标记。兼容路径额外核验上传前后的内容。
-        final bare = etag != null && _bareEtag.hasMatch(etag);
-        if (!strong && !bare) {
+        final fromDownload = WebDavMetadata.parseEtag(downloaded.etag);
+        final validator = fromDownload ?? await _lookupEtag(url, headers);
+        if (validator == null) {
           throw const WebDavSyncException(
-            '服务器未提供可用的 ETag，无法进行条件同步；Web 端请允许读取 ETag 响应头',
+            '服务器未提供可用 ETag（已检查下载响应、HEAD 和 WebDAV 文件属性），'
+            '未修改同步文件；Web 端请允许 HEAD、PROPFIND 并暴露 ETag',
           );
         }
-        verifyContent = bare;
+        etag = validator.value;
+        // 备用属性可能在下载后发生变化；用条件 GET 绑定到原来的完整内容，
+        // 避免将新版本的 ETag 配到旧文件上，再覆盖其他设备的更新。
+        verifyContent = fromDownload == null || !validator.isStrong;
       }
 
       S1BackupPayload? base;
@@ -86,8 +88,12 @@ class WebDavSyncService {
       // 上传前也验证大小，避免写出自己无法再导入的同步文件。
       S1BackupCodec.decode(upload);
       if (verifyContent) {
-        final currentRemote = await _download(url, headers);
-        if (currentRemote.etag?.trim() != etag ||
+        final currentRemote = await _download(url, {
+          ...headers,
+          'If-Match': etag!,
+        });
+        final currentEtag = WebDavMetadata.parseEtag(currentRemote.etag);
+        if ((currentEtag != null && currentEtag.value != etag) ||
             !_sameBytes(currentRemote.bytes, downloaded.bytes!)) {
           _checkStatus(412);
         }
@@ -140,10 +146,76 @@ class WebDavSyncService {
     }
   }
 
-  // 标准强 ETag 允许 opaque 部分包含逗号；无引号兼容值只接受单个 token，
-  // 拒绝弱 ETag、通配符、列表和控制字符，避免改变 If-Match 的含义。
-  static final _strongEtag = RegExp(r'^"[\x21\x23-\x7e\x80-\xff]*"$');
-  static final _bareEtag = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._:-]*$');
+  static const _metadataLimit = 64 * 1024;
+
+  Future<WebDavEtag?> _lookupEtag(
+    String url,
+    Map<String, String> headers,
+  ) async {
+    final head = await _client.requestExternal<ResponseBody>(
+      url,
+      method: 'HEAD',
+      headers: headers,
+      responseType: ResponseType.stream,
+    );
+    await _readBytes(head, _metadataLimit);
+    if (head.statusCode == 404) _checkStatus(412);
+    if (head.statusCode != 405 && head.statusCode != 501) {
+      _checkStatus(head.statusCode);
+      final etag = WebDavMetadata.parseEtag(_singleEtag(head.headers));
+      if (etag != null) return etag;
+    }
+    final properties = await _client.requestExternal<ResponseBody>(
+      url,
+      method: 'PROPFIND',
+      headers: {
+        ...headers,
+        'Depth': '0',
+        'Content-Type': 'application/xml; charset=utf-8',
+      },
+      data: '<?xml version="1.0" encoding="utf-8"?>'
+          '<d:propfind xmlns:d="DAV:"><d:prop><d:getetag/>'
+          '</d:prop></d:propfind>',
+      responseType: ResponseType.stream,
+    );
+    final bytes = await _readBytes(properties, _metadataLimit);
+    if (properties.statusCode == 404) _checkStatus(412);
+    if (properties.statusCode == 405 || properties.statusCode == 501) {
+      return null;
+    }
+    if (properties.statusCode != 207) _checkStatus(properties.statusCode);
+    try {
+      return WebDavMetadata.parseProperties(utf8.decode(bytes), Uri.parse(url));
+    } on FormatException {
+      throw const WebDavSyncException('服务器返回的 WebDAV 文件属性无效，未修改同步文件');
+    }
+  }
+
+  static String? _singleEtag(Headers headers) {
+    final values = headers['etag'];
+    return values?.length == 1 ? values!.single : null;
+  }
+
+  Future<Uint8List> _readBytes(
+    Response<ResponseBody> response,
+    int limit,
+  ) async {
+    final downloaded = BytesBuilder(copy: false);
+    final body = response.data;
+    if (body != null) {
+      await for (final chunk in body.stream) {
+        if (downloaded.length + chunk.length > limit) {
+          throw WebDavSyncException(
+            limit == _metadataLimit
+                ? 'WebDAV 文件属性响应过大，未修改同步文件'
+                : '云端同步文件超过 16 MB，未修改本机数据',
+          );
+        }
+        downloaded.add(chunk);
+      }
+    }
+    return downloaded.takeBytes();
+  }
 
   Future<({Uint8List? bytes, String? etag})> _download(
     String url,
@@ -155,24 +227,13 @@ class WebDavSyncService {
       headers: headers,
       responseType: ResponseType.stream,
     );
-    final downloaded = BytesBuilder(copy: false);
-    final body = response.data;
-    if (body != null) {
-      await for (final chunk in body.stream) {
-        if (downloaded.length + chunk.length >
-            S1BackupCodec.maxCompressedBytes) {
-          throw const WebDavSyncException('云端同步文件超过 16 MB，未修改本机数据');
-        }
-        downloaded.add(chunk);
-      }
-    }
+    final bytes = await _readBytes(response, S1BackupCodec.maxCompressedBytes);
     if (response.statusCode == 404) return (bytes: null, etag: null);
     _checkStatus(response.statusCode);
-    final bytes = downloaded.takeBytes();
     if (bytes.isEmpty) {
       throw const WebDavSyncException('云端同步文件为空，未覆盖本机数据');
     }
-    return (bytes: bytes, etag: response.headers.value('etag'));
+    return (bytes: bytes, etag: _singleEtag(response.headers));
   }
 
   static bool _sameBytes(Uint8List? actual, Uint8List expected) {

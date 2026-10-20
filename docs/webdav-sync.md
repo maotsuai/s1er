@@ -23,7 +23,9 @@ WebDAV 连接信息保存在 `flutter_secure_storage` 对应的平台安全存�
 
 先下载、校验并合并，再条件上传，上传成功后才应用合并结果。首次创建用 `If-None-Match: *`，已有文件用服务器 ETag 和 `If-Match`。若另一台设备在下载后抢先更新，服务器返回 412，本次停止并保留本机数据，手动重试即可。文件损坏、格式过新、超过导入大小限制、认证失败、网络超时等均停止同步，错误文案不包含凭据。
 
-标准服务走强 ETag 条件写入。坚果云等返回无引号 ETag 的服务走兼容路径：保留原值发出 `If-Match`，上传前重新下载并核对标识和完整文件，上传后读回核对；校验失败不应用云端设置、不更新本机合并基线。不会擅自给 ETag 加引号，也不会把 `W/` 弱标记去掉。服务器仍须提供可用的单个 ETag 并执行条件写入；完全缺失、弱 ETag、通配符或列表值会停止同步。额外的内容核验不能替代服务端的原子条件判断，建议避免多台设备同时点击同步。
+优先使用下载响应中的强 ETag。下载头缺失、只有弱标记或格式不可用时，依次尝试同一文件的 `HEAD` 响应与 `PROPFIND`（`Depth: 0` 的 `DAV:getetag` 属性）。只接受目标文件、成功属性状态和 `DAV:` 命名空间中的版本信息，不借用目录或其他文件的 ETag。查询属性后会带 `If-Match` 重新读取并核对原下载内容，防止把新 ETag 错配到旧文件；上传后再读回核对。
+
+坚果云等返回无引号 ETag 的服务走同样的内容核验路径：保留原始标识，兼容其 `+`、`/`、`=` 等 opaque 字符，不擅自加引号或去掉 `W/` 弱标记。校验失败不应用云端设置、不更新本机合并基线。如果三种读取方式都没有可用的单个 ETag，仍停止上传并明确提示，不无条件覆盖文件；通配符、弱标记和列表不能作为上传版本锁。服务器须执行条件写入，额外的内容核验不能替代服务端的原子条件判断，建议避免多台设备同时点击同步。
 
 条件写入遵循 [HTTP If-Match](https://www.rfc-editor.org/rfc/rfc9110.html#name-if-match) 和 [WebDAV ETag](https://www.rfc-editor.org/rfc/rfc4918.html#section-8.6)。应用不会无条件覆盖云端文件，也不会自动重试产生写入的请求。
 
@@ -31,8 +33,8 @@ WebDAV 连接信息保存在 `flutter_secure_storage` 对应的平台安全存�
 
 WebDAV 直接连接用户配置的服务器，不通过论坛 CORS 代理。服务器须允许应用来源的 CORS：
 
-- 方法：`GET`、`PUT`、`OPTIONS`。
-- 请求头：`Authorization`、`Content-Type`、`Cache-Control`、`If-Match`、`If-None-Match`。
+- 方法：`GET`、`HEAD`、`PROPFIND`、`PUT`、`OPTIONS`。
+- 请求头：`Authorization`、`Content-Type`、`Cache-Control`、`Depth`、`If-Match`、`If-None-Match`。
 - 暴露响应头：`ETag`（`Access-Control-Expose-Headers: ETag`）。
 
 安全存储需要 HTTPS 安全上下文（开发时可使用 localhost）。HTTPS 页面通常不能连接 HTTP WebDAV（浏览器混合内容限制）。
