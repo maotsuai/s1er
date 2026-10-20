@@ -1,20 +1,20 @@
 {
   "latest": "0.9.1",
   "minSupported": "0.3.2",
-  "notes": "Beta — 0.9.1：同步上游：首页能看到最近看过的帖子，点一下从上次位置接着读；修复坚果云 WebDAV 因 ETag 格式被误拒绝、无法同步的问题",
-  "publishedAt": "2026-10-19",
+  "notes": "Beta — 0.9.1：下载响应缺少 ETag 时补查 WebDAV 文件属性，避免直接中断同步；同步保留条件上传与前后内容校验，兼容更多无引号 ETag 格式",
+  "publishedAt": "2026-10-20",
   "channels": {
     "github": "https://github.com/maotsuai/s1er/releases/latest",
-    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+16/s1er-0.9.1%2B16-android-universal.apk",
-    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+16/s1er-0.9.1%2B16-android-arm64-v8a.apk",
-    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+16/s1er-0.9.1%2B16-android-armeabi-v7a.apk",
-    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+16/s1er-0.9.1%2B16-android-x86_64.apk",
+    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+17/s1er-0.9.1%2B17-android-universal.apk",
+    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+17/s1er-0.9.1%2B17-android-arm64-v8a.apk",
+    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+17/s1er-0.9.1%2B17-android-armeabi-v7a.apk",
+    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+17/s1er-0.9.1%2B17-android-x86_64.apk",
     "androidNetdisk": null,
     "netdiskHint": null,
-    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+16/s1er-0.9.1%2B16-windows-x64.zip",
+    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+17/s1er-0.9.1%2B17-windows-x64.zip",
     "linux": null,
     "macos": null,
-    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.9.1+16",
+    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.9.1+17",
     "play": null
   }
 }
