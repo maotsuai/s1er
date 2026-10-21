@@ -1477,6 +1477,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
                 S1SwipePagination(
                   key: _swipeKey,
                   mode: S1SwipePaginationMode.smart,
+                  adjacentSkeletonStyle: S1SwipeAdjacentSkeletonStyle.postItem,
                   enabled: !_shareSelectMode && !postsAsync.isLoading,
                   currentPage: state.currentPage,
                   totalPages: state.totalPages,

@@ -1,9 +1,10 @@
-/// 被动读帖手势：只在松手后返回上一页 (-1) / 下一页 (1)。
+/// 读帖手势意图：较小位移锁定方向，较大位移在松手后提交翻页。
 ///
 /// 方向一旦锁定就不再切换；速度不降低位移门槛，避免短促甩动误翻页。
 class ReadingSwipeIntent {
-  static const double directionRatio = 1.8;
-  static const double minimumIntentDistance = 24;
+  // 方向锥略宽于 30°，包容横滑坐标的取整误差。
+  static const double directionRatio = 1.7;
+  static const double minimumIntentDistance = 18;
   static const double commitWidthFraction = 0.22;
   static const Duration longPressTimeout = Duration(milliseconds: 500);
 
@@ -13,6 +14,11 @@ class ReadingSwipeIntent {
   Duration _startTime = Duration.zero;
   _ReadingDirection _direction = _ReadingDirection.blocked;
   int _horizontalSign = 0;
+  double _lastX = 0;
+
+  bool get isHorizontal => _direction == _ReadingDirection.horizontal;
+  bool get isBlocked => _direction == _ReadingDirection.blocked;
+  double get horizontalDelta => isHorizontal ? _lastX - _startX : 0;
 
   void begin({
     required double x,
@@ -21,6 +27,7 @@ class ReadingSwipeIntent {
     required double touchSlop,
   }) {
     _startX = x;
+    _lastX = x;
     _startY = y;
     _startTime = time;
     _touchSlop =
@@ -36,6 +43,7 @@ class ReadingSwipeIntent {
     required double y,
     required Duration time,
   }) {
+    _lastX = x;
     if (_direction != _ReadingDirection.pending) return;
     // 先停留再拖动通常是长按选字或操作菜单，不能成为翻页候选。
     if (time - _startTime >= longPressTimeout) {

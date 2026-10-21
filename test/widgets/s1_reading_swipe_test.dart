@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -72,6 +73,11 @@ Future<void> _swipe(WidgetTester tester, Offset delta) async {
   await tester.pumpAndSettle();
 }
 
+double _previewOffset(WidgetTester tester) => tester
+    .widget<Transform>(find.byKey(const ValueKey('s1-reading-swipe-content')))
+    .transform
+    .storage[12];
+
 void main() {
   for (final platform in [
     TargetPlatform.android,
@@ -114,6 +120,64 @@ void main() {
     await _pumpHarness(tester, requests: requests);
     await _swipe(tester, const Offset(-130, -6));
     expect(requests, [3]);
+  });
+
+  testWidgets('small threshold previews and incomplete swipe animates back',
+      (tester) async {
+    final requests = <int>[];
+    await _pumpHarness(tester, requests: requests);
+    final gesture = await tester.startGesture(_start(tester));
+    await gesture.moveBy(const Offset(-10, 0));
+    await tester.pump();
+    expect(_previewOffset(tester), 0);
+    await gesture.moveBy(const Offset(-30, -8));
+    await tester.pump();
+    expect(_previewOffset(tester), closeTo(-40, 0.01));
+    expect(requests, isEmpty);
+    await gesture.up();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(_previewOffset(tester), greaterThan(-40));
+    expect(_previewOffset(tester), lessThan(0));
+    await tester.pumpAndSettle();
+    expect(_previewOffset(tester), 0);
+    expect(requests, isEmpty);
+  });
+
+  testWidgets(
+      'half-width swipes within 30 degrees work throughout both edge bands',
+      (tester) async {
+    final requests = <int>[];
+    for (final startFraction in [0.001, 0.1, 0.2, 0.8, 0.9, 0.999]) {
+      for (final angle in [-30, -15, 0, 15, 30]) {
+        await tester.pumpWidget(const SizedBox.shrink());
+        requests.clear();
+        await _pumpHarness(tester, requests: requests);
+        final rect = tester.getRect(find.byType(S1ReadingSwipe));
+        final direction = startFraction < 0.5 ? 1 : -1;
+        final start =
+            Offset(rect.left + rect.width * startFraction, rect.top + 250);
+        final delta = Offset(
+          direction * rect.width / 2,
+          rect.width / 2 * math.tan(angle * math.pi / 180),
+        );
+        final position =
+            tester.state<ScrollableState>(find.byType(Scrollable)).position;
+        await tester.timedDragFrom(
+          start,
+          delta,
+          const Duration(milliseconds: 400),
+        );
+        await tester.pumpAndSettle();
+        expect(
+          requests,
+          [direction > 0 ? 1 : 3],
+          reason: 'start=$startFraction angle=$angle',
+        );
+        // 横向胜出后不能让正文跟着 dy 滚动。
+        expect(position.pixels, 0);
+      }
+    }
   });
 
   testWidgets('short fling and withdrawn drag keep current page',
@@ -212,9 +276,12 @@ void main() {
     await _pumpHarness(
       tester,
       requests: requests,
-      content: S1ClickRegion(
-        onTap: () => taps++,
-        child: const SizedBox(height: 2200, child: Text('interactive content')),
+      content: S1ReadingSwipeBlocker(
+        child: S1ClickRegion(
+          onTap: () => taps++,
+          child:
+              const SizedBox(height: 2200, child: Text('interactive content')),
+        ),
       ),
     );
     await tester.tapAt(_start(tester));
@@ -268,6 +335,7 @@ void main() {
     await _pumpHarness(tester, requests: requests, pending: pending.future);
     await tester.dragFrom(_start(tester), const Offset(-150, 0));
     await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
     expect(requests, [3]);
     await tester.dragFrom(_start(tester), const Offset(-150, 0));
     expect(requests, [3]);
@@ -344,7 +412,7 @@ void main() {
     expect(requests, [1]);
   });
 
-  testWidgets('system gesture edges are reserved while center swipe works',
+  testWidgets('edge events delivered by the system can paginate',
       (tester) async {
     final directions = <int>[];
     final size = tester.view.physicalSize / tester.view.devicePixelRatio;
@@ -363,12 +431,61 @@ void main() {
       ),
     );
     await tester.dragFrom(Offset(10, size.height / 2), const Offset(250, 0));
+    await tester.pumpAndSettle();
     await tester.dragFrom(
       Offset(size.width - 10, size.height / 2),
       const Offset(-250, 0),
     );
-    expect(directions, isEmpty);
+    await tester.pumpAndSettle();
+    expect(directions, [-1, 1]);
     await tester.dragFrom(size.center(Offset.zero), const Offset(-250, 0));
-    expect(directions, [1]);
+    await tester.pumpAndSettle();
+    expect(directions, [-1, 1, 1]);
+  });
+
+  testWidgets('ordinary tappable content supports taps and angled pagination',
+      (tester) async {
+    final requests = <int>[];
+    var taps = 0;
+    await _pumpHarness(
+      tester,
+      requests: requests,
+      content: S1ClickRegion(
+        onTap: () => taps++,
+        child:
+            const SizedBox(height: 2200, child: Text('tappable post header')),
+      ),
+    );
+    await tester.tapAt(_start(tester));
+    expect(taps, 1);
+    await tester.timedDragFrom(
+      _start(tester),
+      const Offset(-160, -85),
+      const Duration(milliseconds: 400),
+    );
+    await tester.pumpAndSettle();
+    expect(requests, [3]);
+    expect(taps, 1);
+  });
+
+  testWidgets(
+      'multi touch after preview rolls back and does not poison next swipe',
+      (tester) async {
+    final requests = <int>[];
+    await _pumpHarness(tester, requests: requests);
+    final first = await tester.startGesture(_start(tester), pointer: 1);
+    await first.moveBy(const Offset(-50, 0));
+    await tester.pump();
+    expect(_previewOffset(tester), lessThan(0));
+    final second = await tester
+        .startGesture(_start(tester) + const Offset(30, 0), pointer: 2);
+    await second.up();
+    await first.moveBy(const Offset(-80, 0));
+    await first.up();
+    await tester.pumpAndSettle();
+    expect(requests, isEmpty);
+    expect(_previewOffset(tester), 0);
+    await _swipe(tester, const Offset(-130, -30));
+    expect(requests, [3]);
   });
 }

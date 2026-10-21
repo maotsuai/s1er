@@ -64,12 +64,13 @@ flutter build ios --no-codesign        # 无签名冒烟，验证工程可构建
 
 ### 帖子阅读手势
 
-- 帖子页使用 `S1SwipePaginationMode.smart`：`Listener` 被动观察触摸，不参加 Gesture Arena，也不使用 `PageView` 拖动预览。其它列表继续使用原有拖动翻页。
-- 移动阶段，横向位移超过 `max(系统 touchSlop, 24dp)` 且为纵向的至少 1.8 倍时锁定横向意图；纵向先超过阈值则本次触摸不再翻页。松手时仍须保持横向意图，且净位移达到阅读区域宽度的 22%；速度不降低距离门槛。拖回阈值以内会取消。
-- 正文或嵌套内容开始滚动、惯性滚动中按下、多指、取消事件、先长按再拖动、鼠标拖选、系统左右手势边缘均不提交翻页。图片和 `S1ClickRegion` 用 `S1ReadingSwipeBlocker` 避让，选区变化用 `S1ReadingSwipeBlockNotification` 取消当前候选。新增交互内容时应沿用这两个入口。
+- 帖子页使用 `S1SwipePaginationMode.smart`：自定义横向 Drag Recognizer 在 Gesture Arena 中与正文竖滚竞争；方向锁定后显示跟手邻页骨架预览，松手才确认翻页或用 200ms 动画回弹。动画仅更新 Transform，正文不随每帧重建。其它列表继续使用原有拖动翻页。
+- 移动阶段，横向位移超过 `max(系统 touchSlop, 18dp)` 且为纵向的至少 1.7 倍时锁定横向意图，涵盖相对水平线约 30° 内的横滑；纵向先胜出则本次触摸不再翻页。松手时仍须保持横向意图，且净位移达到阅读区域宽度的 22%；速度不降低距离门槛。拖回阈值以内会取消。
+- 不因横向锁定后的累计纵向偏移再次取消手势，否则半屏距离的斜向横滑会失效。惯性滚动中按下、多指、取消事件、先长按再拖动、鼠标拖选不提交翻页。系统交给 Flutter 的边缘事件正常参与识别；系统截获后通过 cancel 回弹，不另行禁用侧边 20% 等区域。
+- 图片缩放等内容用 `S1ReadingSwipeBlocker` 避让，嵌套横向列表优先赢得手势竞争；选区变化用 `S1ReadingSwipeBlockNotification` 取消当前候选。普通 `S1ClickRegion` 由点击/横滑识别器竞争，不再整块禁用翻页。
 - 分享多选期间关闭横滑；末页（含单页）仅在触底后确认左滑才刷新。纵向下拉刷新、触底刷新与底部分页按钮保留。
 - 阈值集中在 `lib/utils/reading_swipe_intent.dart`，属于待真机调优的初始参数。回归：`flutter test test/utils/reading_swipe_intent_test.dart test/widgets/s1_reading_swipe_test.dart`。
-- 参考：[共享会话中的智能手势方案](https://chatgpt.com/share/6ad89f43-80e8-83ec-929a-b00188186c33)。
+- 参考：[共享会话中的智能手势方案](https://chatgpt.com/share/6ad89f43-80e8-83ec-929a-b00188186c33)；[Thunder 导航手势](https://github.com/thunder-app/thunder/blob/d5de00be11fd3256c9debcf4a8cea8bc9fe91ce3/lib/src/core/navigation/swipeable_page_route.dart) 的横向识别器、跟手更新与释放后完成/恢复结构。Thunder 处理的是路由返回，本项目独立实现页内翻页，未引入其依赖或复制路由实现。
 
 ### 已知限制
 

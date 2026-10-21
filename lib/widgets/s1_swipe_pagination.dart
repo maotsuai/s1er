@@ -28,7 +28,7 @@ enum S1SwipePaginationMode { drag, smart }
 
 /// 左右滑动翻页，与底部分页栏双向同步。
 ///
-/// drag 使用三槽 [PageView]；smart 被动观察手势，松手确认后才请求翻页。
+/// drag 使用三槽 [PageView]；smart 锁定横向意图后跟手，松手确认或回弹。
 class S1SwipePagination extends StatefulWidget {
   const S1SwipePagination({
     super.key,
@@ -445,11 +445,11 @@ class S1SwipePaginationState extends State<S1SwipePagination> {
     return body;
   }
 
-  void _onSmartSwipe(int direction) {
+  Future<void> _onSmartSwipe(int direction) async {
     if (_isPaging || !widget.enabled) return;
     final target = widget.currentPage + direction;
     if (target >= 1 && target <= widget.totalPages) {
-      unawaited(_requestPage(target));
+      await _requestPage(target);
       return;
     }
     if (direction > 0 && widget.onTerminalRefresh != null) {
@@ -478,6 +478,10 @@ class S1SwipePaginationState extends State<S1SwipePagination> {
             key: ValueKey(widget.currentPage),
             enabled: widget.enabled && !_isPaging,
             onSwipe: _onSmartSwipe,
+            canSwipeToPrevious: _canSwipeToPrevious,
+            canSwipeToNext: _canSwipeToNext,
+            previousPreview: _buildSlotContent(context, 0),
+            nextPreview: _buildSlotContent(context, 2),
             child: _buildSlotContent(context, _centerSlot),
           ),
         ),
