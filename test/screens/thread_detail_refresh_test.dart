@@ -26,11 +26,20 @@ class _FakePostNotifier extends PostNotifier {
     super.tid, {
     this.empty = false,
     this.lastPageIncomplete = false,
+    this.longPost = false,
   });
 
   final bool empty;
   final bool lastPageIncomplete;
+  final bool longPost;
   int refreshCount = 0;
+  int pageRequestCount = 0;
+
+  @override
+  Future<void> goToPage(int page) async {
+    // 模拟网络失败：与真实 Notifier 一样保留当前数据。
+    pageRequestCount++;
+  }
 
   @override
   Future<PostListState> build() async {
@@ -77,7 +86,7 @@ class _FakePostNotifier extends PostNotifier {
           pid: '1',
           author: '用户',
           authorId: '1',
-          message: '楼层正文',
+          message: longPost ? List.filled(80, '楼层正文').join('\n') : '楼层正文',
           dateline: 1700000000,
           floor: 1,
         ),
@@ -159,6 +168,12 @@ void main() {
       expect(find.text('楼层正文'), findsOneWidget);
       expect(find.byType(RefreshIndicator), findsOneWidget);
 
+      expect(
+        tester.widget<S1SwipePagination>(find.byType(S1SwipePagination)).mode,
+        S1SwipePaginationMode.smart,
+      );
+      expect(find.byType(PageView), findsNothing);
+
       final moreMenuFinder = find.descendant(
         of: find.byType(AppBarMoreMenu),
         matching: find.byTooltip('更多操作'),
@@ -206,6 +221,33 @@ void main() {
 
     expect(find.text('本页到底 · 左滑或点下一页'), findsOneWidget);
     expect(find.textContaining('再拉刷新'), findsNothing);
+  });
+
+  testWidgets('failed swipe pagination keeps page and shows retry feedback',
+      (tester) async {
+    final notifier = _FakePostNotifier('204', longPost: true);
+    await _pumpThread(tester: tester, tid: '204', notifier: notifier);
+    final pagination = find.byType(S1SwipePagination);
+    await tester.drag(pagination, const Offset(0, -200));
+    await tester.pumpAndSettle();
+    final list =
+        find.descendant(of: pagination, matching: find.byType(ListView));
+    final position = tester
+        .state<ScrollableState>(
+          find.descendant(of: list, matching: find.byType(Scrollable)).first,
+        )
+        .position;
+    final before = position.pixels;
+    expect(before, greaterThan(0));
+    await tester.drag(
+      pagination,
+      Offset(-tester.getSize(pagination).width * 0.3, 0),
+    );
+    await tester.pumpAndSettle();
+    expect(notifier.pageRequestCount, 1);
+    expect(find.text('翻页失败，请重试'), findsOneWidget);
+    expect(tester.widget<S1SwipePagination>(pagination).currentPage, 1);
+    expect(position.pixels, before);
   });
 
   test('resolveThreadEndRefreshOutcome covers last-page growth cases', () {

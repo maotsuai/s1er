@@ -32,6 +32,7 @@ void main() {
                   ),
                 ),
                 child: S1SwipePagination(
+                  mode: S1SwipePaginationMode.smart,
                   currentPage: currentPage,
                   totalPages: totalPages,
                   onPageChanged: (_) async {},

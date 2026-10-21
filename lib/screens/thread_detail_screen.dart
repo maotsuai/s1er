@@ -651,12 +651,18 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
           _openScrollConsumed = true;
           _pendingInitialNavigation = false;
         });
+        S1SnackBar.show(context, message: '翻页失败，请重试');
         return;
       }
     } else {
       await ref.read(postProvider(widget.tid).notifier).goToPage(page);
     }
     if (!mounted) return;
+    // Notifier 在超时/API 错误时保留旧数据；不能据此改路由或重置阅读位置。
+    if (ref.read(postProvider(widget.tid)).asData?.value.currentPage != page) {
+      S1SnackBar.show(context, message: '翻页失败，请重试');
+      return;
+    }
     _swipeKey.currentState?.syncAfterExternalPageChange();
     final destination = ThreadPage(widget.tid, page);
     if (widget.onDestinationChanged != null) {
@@ -1470,9 +1476,10 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
               children: [
                 S1SwipePagination(
                   key: _swipeKey,
+                  mode: S1SwipePaginationMode.smart,
+                  enabled: !_shareSelectMode && !postsAsync.isLoading,
                   currentPage: state.currentPage,
                   totalPages: state.totalPages,
-                  adjacentSkeletonStyle: S1SwipeAdjacentSkeletonStyle.postItem,
                   onScrollMetricsChanged: _onScrollMetricsChanged,
                   onPageChanged: _goToPage,
                   onTerminalRefresh: _shareSelectMode ? null : _refreshFromEnd,

@@ -115,6 +115,7 @@ class _NextFloorHarnessState extends State<_NextFloorHarness> {
                 },
               ),
               child: S1SwipePagination(
+                mode: S1SwipePaginationMode.smart,
                 key: _swipeKey,
                 currentPage: widget.currentPage,
                 totalPages: widget.totalPages,

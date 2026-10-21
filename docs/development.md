@@ -62,9 +62,18 @@ flutter build ios --no-codesign        # 无签名冒烟，验证工程可构建
 3. **正文渲染打点**：编译时加 `--dart-define=BBCODE_PROFILE=true`，BBCode 解析 / Html 首帧耗时以 `[bbcode-profile]` 写入 Talker（App 内可见，无需连控制台）。
 4. **系统级分析**：`flutter run --profile` 后打开 DevTools Performance overlay，区分 UI 线程（build）与 Raster 线程瓶颈。
 
+### 帖子阅读手势
+
+- 帖子页使用 `S1SwipePaginationMode.smart`：`Listener` 被动观察触摸，不参加 Gesture Arena，也不使用 `PageView` 拖动预览。其它列表继续使用原有拖动翻页。
+- 移动阶段，横向位移超过 `max(系统 touchSlop, 24dp)` 且为纵向的至少 1.8 倍时锁定横向意图；纵向先超过阈值则本次触摸不再翻页。松手时仍须保持横向意图，且净位移达到阅读区域宽度的 22%；速度不降低距离门槛。拖回阈值以内会取消。
+- 正文或嵌套内容开始滚动、惯性滚动中按下、多指、取消事件、先长按再拖动、鼠标拖选、系统左右手势边缘均不提交翻页。图片和 `S1ClickRegion` 用 `S1ReadingSwipeBlocker` 避让，选区变化用 `S1ReadingSwipeBlockNotification` 取消当前候选。新增交互内容时应沿用这两个入口。
+- 分享多选期间关闭横滑；末页（含单页）仅在触底后确认左滑才刷新。纵向下拉刷新、触底刷新与底部分页按钮保留。
+- 阈值集中在 `lib/utils/reading_swipe_intent.dart`，属于待真机调优的初始参数。回归：`flutter test test/utils/reading_swipe_intent_test.dart test/widgets/s1_reading_swipe_test.dart`。
+- 参考：[共享会话中的智能手势方案](https://chatgpt.com/share/6ad89f43-80e8-83ec-929a-b00188186c33)。
+
 ### 已知限制
 
-- `/forum/:fid`、`/thread/:tid` 使用无转场页面，iOS 边缘侧滑返回在这两个页面不生效（与帖子页横滑翻页手势冲突，见 AGENTS.md 已知约束）。
+- `/forum/:fid`、`/thread/:tid` 使用无转场页面，iOS 边缘侧滑返回在这两个页面不生效；帖子页改用被动智能翻页后，该路由限制仍需独立评估（见 AGENTS.md 已知约束）。
 - 升级弹窗在 iOS 回退 GitHub 发布页（清单 `channels.ios` 为空时）；网盘/Play 入口仅 Android 展示。
 
 ## Web 开发代理

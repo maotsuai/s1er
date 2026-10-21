@@ -20,6 +20,7 @@ import '../utils/inline_image_decode.dart';
 import 'lazy_visibility_loader.dart';
 import 'force_show_images.dart';
 import 's1_click_region.dart';
+import 's1_reading_swipe.dart';
 
 class ImageViewer extends ConsumerStatefulWidget {
   const ImageViewer({
@@ -493,6 +494,8 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
   /// 窄图按固有宽度居中。不再单独设图片 max——栏宽已由阅读布局约束。
   Widget _wrapBlockImage(Widget child) {
     if (widget.isEmoticon) return child;
+
+    child = S1ReadingSwipeBlocker(child: child);
 
     if (widget.margin != null) {
       child = Padding(padding: widget.margin!, child: child);

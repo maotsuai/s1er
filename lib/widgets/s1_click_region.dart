@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 
 import '../theme/s1_haptics.dart';
+import 's1_reading_swipe.dart';
 
 /// Clickable region without Material splash; shows hand cursor on desktop/web.
 class S1ClickRegion extends StatelessWidget {
@@ -27,7 +28,7 @@ class S1ClickRegion extends StatelessWidget {
     final tap = haptic ? S1Haptics.wrapTap(onTap) : onTap;
     final longPress =
         haptic ? S1Haptics.wrapLongPress(onLongPress) : onLongPress;
-    return MouseRegion(
+    final region = MouseRegion(
       cursor: onTap == null && onLongPress == null
           ? MouseCursor.defer
           : SystemMouseCursors.click,
@@ -38,5 +39,8 @@ class S1ClickRegion extends StatelessWidget {
         child: child,
       ),
     );
+    return onTap != null || onLongPress != null
+        ? S1ReadingSwipeBlocker(child: region)
+        : region;
   }
 }

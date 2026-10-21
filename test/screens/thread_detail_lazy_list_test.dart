@@ -38,6 +38,7 @@ Widget _buildLazyListHarness({required int itemCount}) {
     home: Scaffold(
       appBar: AppBar(title: const Text('Thread')),
       body: S1SwipePagination(
+        mode: S1SwipePaginationMode.smart,
         currentPage: 1,
         totalPages: 1,
         onPageChanged: (_) async {},

@@ -8,6 +8,7 @@ import '../utils/boundary_feedback.dart';
 import '../utils/scroll_motion.dart';
 import 's1_fab_layout.dart';
 import 's1_scroll_boundary_listener.dart';
+import 's1_reading_swipe.dart';
 import 's1_terminal_left_swipe.dart';
 import 'skeleton/s1_swipe_adjacent_skeleton.dart';
 
@@ -23,10 +24,11 @@ typedef S1PageChangeCallback = Future<void> Function(int page);
 
 typedef S1PageBoundaryCallback = void Function(BoundaryEdge edge);
 
-/// 三槽 [PageView] 左右滑动翻页，与底部分页栏双向同步。
+enum S1SwipePaginationMode { drag, smart }
+
+/// 左右滑动翻页，与底部分页栏双向同步。
 ///
-/// 始终将当前页放在中间槽（index 1），滑动到两侧槽后触发 [onPageChanged]，
-/// 数据返回后重置回中心槽。
+/// drag 使用三槽 [PageView]；smart 被动观察手势，松手确认后才请求翻页。
 class S1SwipePagination extends StatefulWidget {
   const S1SwipePagination({
     super.key,
@@ -39,6 +41,7 @@ class S1SwipePagination extends StatefulWidget {
     this.boundaryFeedback,
     this.onTerminalRefresh,
     this.enabled = true,
+    this.mode = S1SwipePaginationMode.drag,
     this.showPagingIndicator = true,
     this.adjacentSkeletonStyle = S1SwipeAdjacentSkeletonStyle.generic,
   });
@@ -64,13 +67,15 @@ class S1SwipePagination extends StatefulWidget {
   /// 越界节流控制器；为 null 时使用内部默认实例。
   final BoundaryFeedbackController? boundaryFeedback;
 
-  /// 末页左滑一次、或纵滑触底继续上划：刷新当前页（由父级实现）。
+  /// 末页左滑、或纵滑触底继续上划：刷新当前页（由父级实现）。
   ///
-  /// 单页不启用 [PageView]；触底后的左滑由 [S1TerminalLeftSwipe] 处理。
+  /// smart 模式仅在触底后确认左滑才刷新；drag 单页使用 [S1TerminalLeftSwipe]。
   final Future<void> Function()? onTerminalRefresh;
 
   /// 是否启用左右滑动翻页。单页自动禁用 [PageView]。
   final bool enabled;
+
+  final S1SwipePaginationMode mode;
 
   /// 滑动翻页时是否在内容区顶部显示进度条。
   ///
@@ -115,7 +120,8 @@ class S1SwipePaginationState extends State<S1SwipePagination> {
       _boundaryFeedback = widget.boundaryFeedback!;
     }
     if (oldWidget.currentPage != widget.currentPage &&
-        widget.currentPage != _pendingPage) {
+        (widget.mode == S1SwipePaginationMode.smart ||
+            widget.currentPage != _pendingPage)) {
       _boundaryFeedback.reset();
       _lastPageRefreshDispatchedThisGesture = false;
       _resetScrollForPageChange();
@@ -308,7 +314,10 @@ class S1SwipePaginationState extends State<S1SwipePagination> {
       await widget.onPageChanged(page);
     } finally {
       if (mounted) {
-        _resetScrollForPageChange();
+        // smart 模式在实际页码变化时复位；请求失败时保留阅读位置。
+        if (widget.mode == S1SwipePaginationMode.drag) {
+          _resetScrollForPageChange();
+        }
         setState(() {
           _isPaging = false;
           _pendingPage = null;
@@ -436,8 +445,51 @@ class S1SwipePaginationState extends State<S1SwipePagination> {
     return body;
   }
 
+  void _onSmartSwipe(int direction) {
+    if (_isPaging || !widget.enabled) return;
+    final target = widget.currentPage + direction;
+    if (target >= 1 && target <= widget.totalPages) {
+      unawaited(_requestPage(target));
+      return;
+    }
+    if (direction > 0 && widget.onTerminalRefresh != null) {
+      // 页内任意位置的左滑不能意外刷新并移动阅读位置。
+      if (!_scrollController.hasClients ||
+          !_scrollController.position.hasContentDimensions ||
+          _scrollController.position.extentAfter >
+              S1TerminalLeftSwipe.extentSlack) {
+        return;
+      }
+    }
+    _lastPageRefreshDispatchedThisGesture = false;
+    _onHorizontalBoundaryBlocked(
+      direction < 0 ? BoundaryEdge.firstPage : BoundaryEdge.lastPage,
+    );
+  }
+
+  Widget _buildSmartBody(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_isPaging && widget.showPagingIndicator)
+          const LinearProgressIndicator(minHeight: 2),
+        Expanded(
+          child: S1ReadingSwipe(
+            key: ValueKey(widget.currentPage),
+            enabled: widget.enabled && !_isPaging,
+            onSwipe: _onSmartSwipe,
+            child: _buildSlotContent(context, _centerSlot),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.mode == S1SwipePaginationMode.smart) {
+      return _buildSmartBody(context);
+    }
     if (!_usePageView) {
       return _buildSinglePageBody(context);
     }
