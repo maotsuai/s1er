@@ -16,6 +16,7 @@ import '../providers/post_provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/reading_history_provider.dart';
 import '../providers/settings_provider.dart';
+import '../providers/webdav_sync_provider.dart';
 import '../providers/thread_open_intent_provider.dart';
 import '../utils/compose_img_tags.dart';
 import '../utils/quote_snapshot_store.dart';
@@ -136,6 +137,31 @@ class ThreadDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
+  late final WebDavSyncNotifier _sync;
+  bool _syncScrolling = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sync = ref.read(webDavSyncProvider.notifier);
+    _sync.enterReading(this);
+  }
+
+  bool _onSyncScrollNotification(ScrollNotification notification) {
+    if (notification.depth != 0) return false;
+    if (notification is ScrollStartNotification ||
+        notification is ScrollUpdateNotification) {
+      _syncScrolling = true;
+    } else if (notification is ScrollEndNotification) {
+      _syncScrolling = false;
+    }
+    _sync.setReadingBusy(
+      this,
+      _syncScrolling || ref.read(postProvider(widget.tid)).isLoading,
+    );
+    return false;
+  }
+
   static const _maxOpenScrollRetries = 12;
   static const _locateOverlayTimeout = Duration(seconds: 2);
 
@@ -226,6 +252,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
 
   @override
   void dispose() {
+    _sync.leaveReading(this);
     _locateOverlayTimer?.cancel();
     widget.chromeBridge?.clear();
     _scrollFabVisibility.dispose();
@@ -1292,6 +1319,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
     });
 
     final postsAsync = ref.watch(postProvider(widget.tid));
+    _sync.setReadingBusy(this, _syncScrolling || postsAsync.isLoading);
     final jumpStack = ref.watch(inThreadJumpStackProvider(widget.tid));
     final isLoggedIn = ref.watch(
       authStateProvider.select((auth) => auth.isLoggedIn),
@@ -1474,40 +1502,45 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                S1SwipePagination(
-                  key: _swipeKey,
-                  mode: S1SwipePaginationMode.smart,
-                  adjacentSkeletonStyle: S1SwipeAdjacentSkeletonStyle.postItem,
-                  enabled: !_shareSelectMode && !postsAsync.isLoading,
-                  currentPage: state.currentPage,
-                  totalPages: state.totalPages,
-                  onScrollMetricsChanged: _onScrollMetricsChanged,
-                  onPageChanged: _goToPage,
-                  onTerminalRefresh: _shareSelectMode ? null : _refreshFromEnd,
-                  pageBuilder: (context, scrollController) {
-                    final list = _buildPostPageList(
-                      scrollController,
-                      state,
-                      visible,
-                      hasPageQuery,
-                    );
-                    return ScrollPointerGateHost(
-                      onScrollEnd: _onScrollEndRecordProgress,
-                      child: Scrollbar(
-                        controller: scrollController,
-                        child: _shareSelectMode
-                            ? list
-                            : RefreshIndicator(
-                                onRefresh: () => S1Haptics.wrapRefresh(
-                                  () => ref
-                                      .read(postProvider(widget.tid).notifier)
-                                      .refresh(),
+                NotificationListener<ScrollNotification>(
+                  onNotification: _onSyncScrollNotification,
+                  child: S1SwipePagination(
+                    key: _swipeKey,
+                    mode: S1SwipePaginationMode.smart,
+                    adjacentSkeletonStyle:
+                        S1SwipeAdjacentSkeletonStyle.postItem,
+                    enabled: !_shareSelectMode && !postsAsync.isLoading,
+                    currentPage: state.currentPage,
+                    totalPages: state.totalPages,
+                    onScrollMetricsChanged: _onScrollMetricsChanged,
+                    onPageChanged: _goToPage,
+                    onTerminalRefresh:
+                        _shareSelectMode ? null : _refreshFromEnd,
+                    pageBuilder: (context, scrollController) {
+                      final list = _buildPostPageList(
+                        scrollController,
+                        state,
+                        visible,
+                        hasPageQuery,
+                      );
+                      return ScrollPointerGateHost(
+                        onScrollEnd: _onScrollEndRecordProgress,
+                        child: Scrollbar(
+                          controller: scrollController,
+                          child: _shareSelectMode
+                              ? list
+                              : RefreshIndicator(
+                                  onRefresh: () => S1Haptics.wrapRefresh(
+                                    () => ref
+                                        .read(postProvider(widget.tid).notifier)
+                                        .refresh(),
+                                  ),
+                                  child: list,
                                 ),
-                                child: list,
-                              ),
-                      ),
-                    );
-                  },
+                        ),
+                      );
+                    },
+                  ),
                 ),
                 if (showLocateOverlay)
                   const Positioned.fill(

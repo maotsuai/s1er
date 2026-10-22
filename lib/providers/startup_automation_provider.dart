@@ -26,9 +26,7 @@ class StartupAutomationNotifier extends Notifier<void> {
       final settings = ref.read(automationSettingsProvider);
       if (!_startupChecked) {
         _startupChecked = true;
-        if (settings.syncOnStartup) {
-          unawaited(ref.read(webDavSyncProvider.notifier).sync());
-        }
+        ref.read(webDavSyncProvider.notifier).start();
       }
       final auth = ref.read(authStateProvider);
       final uid = auth.user?.uid ?? '';

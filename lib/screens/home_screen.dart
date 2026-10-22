@@ -23,6 +23,7 @@ import '../utils/home_root_back.dart';
 import '../utils/s1_snack_bar.dart';
 import '../widgets/s1_fab_layout.dart';
 import '../widgets/app_bar_more_menu.dart';
+import '../widgets/webdav_sync_button.dart';
 import '../widgets/favorite_confirm_dialog.dart';
 import '../widgets/hide_forum_confirm_dialog.dart';
 import '../widgets/s1_error_view.dart';
@@ -198,6 +199,7 @@ class _HomeScreenBodyState extends ConsumerState<_HomeScreenBody> {
           ),
           actions: isProfileTab
               ? [
+                  const WebDavSyncButton(),
                   if (isLoggedIn)
                     AppBarMoreMenu(
                       onRefresh: () =>
@@ -207,6 +209,7 @@ class _HomeScreenBodyState extends ConsumerState<_HomeScreenBody> {
                 ]
               : isMessagesTab
                   ? [
+                      const WebDavSyncButton(),
                       AppBarMoreMenu(
                         onRefresh: () {
                           ref.read(pmListProvider.notifier).refresh();
@@ -220,6 +223,7 @@ class _HomeScreenBodyState extends ConsumerState<_HomeScreenBody> {
                       ),
                     ]
                   : [
+                      const WebDavSyncButton(),
                       if (isLoggedIn)
                         AppBarMoreMenu(
                           onRefresh: () =>

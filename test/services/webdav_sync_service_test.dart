@@ -203,6 +203,49 @@ void main() {
     );
   });
 
+  test(
+      'transient network errors and permanent configuration errors are distinct',
+      () async {
+    failGet = 503;
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>()
+            .having((e) => e.kind, 'kind', WebDavSyncFailureKind.network),
+      ),
+    );
+    failGet = 401;
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>().having(
+          (e) => e.kind,
+          'kind',
+          WebDavSyncFailureKind.configuration,
+        ),
+      ),
+    );
+    failGet = 0;
+    conflict = true;
+    await expectLater(
+      sync(),
+      throwsA(
+        isA<WebDavSyncException>()
+            .having((e) => e.kind, 'kind', WebDavSyncFailureKind.conflict),
+      ),
+    );
+    expect(local.settings.get<Object>(WebDavSyncService.baselineKey), isNull);
+  });
+
+  test('unchanged data skips PUT despite new export metadata', () async {
+    await sync();
+    final firstCloud = cloud;
+    final firstPutCalls = putCalls;
+    await sync();
+    expect(putCalls, firstPutCalls);
+    expect(cloud, firstCloud);
+  });
+
   test('first sync restores cloud preferences and merges latest history by uid',
       () async {
     await backup.importPayload(
@@ -511,6 +554,7 @@ void main() {
       cloud = S1BackupCodec.encode(payload(settings: {'font_size': 18}));
       revision++;
     };
+    await local.settings.putAsync('fontSize', 16);
     await expectLater(
       sync(),
       throwsA(

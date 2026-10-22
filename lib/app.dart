@@ -12,6 +12,7 @@ import 'providers/reading_history_coordinator.dart';
 import 'providers/pinned_reply_sync_coordinator.dart';
 import 'providers/settings_provider.dart';
 import 'providers/startup_automation_provider.dart';
+import 'providers/webdav_sync_provider.dart';
 import 'providers/update_check_provider.dart';
 import 'providers/whats_new_provider.dart';
 import 'screens/home_screen.dart';
@@ -246,6 +247,9 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    ref
+        .read(webDavSyncProvider.notifier)
+        .setForeground(state == AppLifecycleState.resumed);
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.detached) {
       unawaited(ref.read(localDataProvider).flushPendingWrites());
