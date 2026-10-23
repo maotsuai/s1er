@@ -47,7 +47,7 @@ void main() {
     expect(find.text('已屏蔽版块'), findsOneWidget);
     expect(find.text('数据管理'), findsOneWidget);
     expect(find.text('同步与自动化'), findsOneWidget);
-    expect(find.text('启动时自动同步'), findsOneWidget);
+    expect(find.text('自动同步'), findsOneWidget);
     expect(find.text('自动签到'), findsOneWidget);
     expect(find.text('清除图片缓存'), findsOneWidget);
     expect(find.text('导出备份'), findsOneWidget);

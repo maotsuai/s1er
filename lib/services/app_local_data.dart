@@ -6,12 +6,38 @@ import 'package:drift/drift.dart';
 import '../models/blacklist_record.dart';
 import '../models/reading_record.dart';
 import 'app_database.dart';
+import 'backup/s1_backup_codec.dart';
 import 'settings_store.dart';
 import 'talker.dart';
 
 /// Local structured data: in-memory mirrors + Drift write-through.
 class AppLocalData {
-  AppLocalData(this.db) : settings = SettingsStore(db);
+  AppLocalData(this.db) : settings = SettingsStore(db) {
+    settings.onChanged = (key, previous, next) {
+      if (key == 'pinnedThreads' ||
+          S1BackupSettingsMapper.appToBackup.containsKey(key)) {
+        if (jsonEncode(previous) != jsonEncode(next)) markSyncChanged();
+      }
+    };
+  }
+
+  final _syncChanges = StreamController<int>.broadcast();
+  int _syncRevision = 0;
+  Stream<int> get syncChanges => _syncChanges.stream;
+  int get syncRevision => _syncRevision;
+  bool get hasPendingSyncChanges =>
+      settings.get<bool>('webdav_sync_pending') ?? false;
+
+  void markSyncChanged() {
+    _syncRevision++;
+    if (!hasPendingSyncChanges) settings.put('webdav_sync_pending', true);
+    _syncChanges.add(_syncRevision);
+  }
+
+  /// 只确认本次快照覆盖的修改；上传期间的新修改继续排队。
+  void markSyncCompleted(int revision) {
+    if (_syncRevision == revision) settings.put('webdav_sync_pending', false);
+  }
 
   static const Duration _writeDebounce = Duration(milliseconds: 400);
 
@@ -38,6 +64,7 @@ class AppLocalData {
   Future<void>? _blacklistLoad;
   final Map<String, Timer> _pendingReadingWrites = {};
   final Map<String, ReadingRecord> _pendingReadingRecords = {};
+  Set<String>? _readingChangesDuringLoad;
   final List<Future<void>> _pendingBlacklistWrites = [];
 
   /// Settings only — used at cold start.
@@ -85,25 +112,42 @@ class AppLocalData {
   }
 
   Future<void> _loadReadingHistory() async {
-    readingHistory.clear();
-    final historyRows = await db.select(db.readingHistories).get();
-    for (final row in historyRows) {
-      readingHistory['${row.uid}_${row.tid}'] = {
-        'tid': row.tid,
-        'subject': row.subject,
-        'author': row.author,
-        'fid': row.fid,
-        'lastReadPage': row.lastReadPage,
-        'lastReadFloor': row.lastReadFloor,
-        'totalPages': row.totalPages,
-        'totalReplies': row.totalReplies,
-        'perPage': row.perPage,
-        'lastReadAt': row.lastReadAt,
-        'firstReadAt': row.firstReadAt,
-        'readCount': row.readCount,
-      };
+    // 云端导入/重载期间仍允许阅读。保留尚未落库及查询期间更新/删除的记录。
+    final changed = {..._pendingReadingRecords.keys};
+    _readingChangesDuringLoad = changed;
+    try {
+      final historyRows = await db.select(db.readingHistories).get();
+      final live = {for (final key in changed) key: readingHistory[key]};
+      readingHistory.clear();
+      for (final row in historyRows) {
+        readingHistory['${row.uid}_${row.tid}'] = {
+          'tid': row.tid,
+          'subject': row.subject,
+          'author': row.author,
+          'fid': row.fid,
+          'lastReadPage': row.lastReadPage,
+          'lastReadFloor': row.lastReadFloor,
+          'totalPages': row.totalPages,
+          'totalReplies': row.totalReplies,
+          'perPage': row.perPage,
+          'lastReadAt': row.lastReadAt,
+          'firstReadAt': row.firstReadAt,
+          'readCount': row.readCount,
+        };
+      }
+      for (final entry in live.entries) {
+        if (entry.value == null) {
+          readingHistory.remove(entry.key);
+        } else {
+          readingHistory[entry.key] = entry.value!;
+        }
+      }
+      _readingHistoryLoaded = true;
+    } finally {
+      if (identical(_readingChangesDuringLoad, changed)) {
+        _readingChangesDuringLoad = null;
+      }
     }
-    _readingHistoryLoaded = true;
   }
 
   Future<void> _loadPollVotes() async {
@@ -155,6 +199,7 @@ class AppLocalData {
   void putBlacklistRecord(BlacklistRecord entry) {
     if (entry.uid.isEmpty) return;
     blacklist[entry.uid] = entry;
+    markSyncChanged();
     final future = db.into(db.blacklistEntries).insertOnConflictUpdate(
           BlacklistEntriesCompanion.insert(
             uid: entry.uid,
@@ -170,6 +215,7 @@ class AppLocalData {
   void deleteBlacklistRecord(String uid) {
     if (uid.isEmpty) return;
     blacklist.remove(uid);
+    markSyncChanged();
     final future =
         (db.delete(db.blacklistEntries)..where((t) => t.uid.equals(uid))).go();
     _pendingBlacklistWrites.add(future.then((_) {}));
@@ -177,6 +223,7 @@ class AppLocalData {
 
   Future<void> clearBlacklist() async {
     blacklist.clear();
+    markSyncChanged();
     await _awaitPendingBlacklistWrites();
     await db.delete(db.blacklistEntries).go();
   }
@@ -185,6 +232,8 @@ class AppLocalData {
     final key = '${uid}_${record.tid}';
     final json = record.toJson();
     readingHistory[key] = json;
+    _readingChangesDuringLoad?.add(key);
+    markSyncChanged();
     _pendingReadingRecords[key] = record;
     _pendingReadingWrites[key]?.cancel();
     _pendingReadingWrites[key] = Timer(_writeDebounce, () {
@@ -239,6 +288,8 @@ class AppLocalData {
     _pendingReadingWrites.remove(key)?.cancel();
     _pendingReadingRecords.remove(key);
     readingHistory.remove(key);
+    _readingChangesDuringLoad?.add(key);
+    markSyncChanged();
     unawaited(
       (db.delete(db.readingHistories)
             ..where((t) => t.uid.equals(uid) & t.tid.equals(tid)))
@@ -251,16 +302,19 @@ class AppLocalData {
     final keys =
         readingHistory.keys.where((k) => k.startsWith('${uid}_')).toList();
     for (final key in keys) {
+      _readingChangesDuringLoad?.add(key);
       _pendingReadingWrites.remove(key)?.cancel();
       _pendingReadingRecords.remove(key);
       readingHistory.remove(key);
     }
     await (db.delete(db.readingHistories)..where((t) => t.uid.equals(uid)))
         .go();
+    markSyncChanged();
   }
 
   void putPollVotes(String uid, String tid, List<String> optionIds) {
     pollVotes['${uid}_$tid'] = List<String>.from(optionIds);
+    markSyncChanged();
     unawaited(
       db.into(db.pollVotes).insertOnConflictUpdate(
             PollVotesCompanion.insert(
@@ -278,6 +332,7 @@ class AppLocalData {
       pollVotes.remove(key);
     }
     await (db.delete(db.pollVotes)..where((t) => t.uid.equals(uid))).go();
+    markSyncChanged();
   }
 
   void _loadPinnedThreads() {

@@ -1,8 +1,10 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../widgets/webdav_sync_button.dart';
 import '../config/api_config.dart';
 import '../widgets/s1_desktop_scaffold.dart';
 import '../widgets/s1_content_width.dart';
@@ -265,6 +267,7 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
             : Text(forum.isNotEmpty ? forum : '版块 #${widget.fid}'),
         actions: isSplit
             ? [
+                const WebDavSyncButton(),
                 FavoriteBookmarkButton(
                   type: FavoriteType.forum,
                   id: widget.fid,
@@ -280,6 +283,7 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
                 ),
               ]
             : [
+                const WebDavSyncButton(),
                 FavoriteBookmarkButton(
                   type: FavoriteType.forum,
                   id: widget.fid,

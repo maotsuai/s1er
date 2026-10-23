@@ -117,11 +117,22 @@ class PostNotifier extends AsyncNotifier<PostListState> {
   final String tid;
   String? _filterAuthorId;
   String? _filterAuthorName;
+  final _pages = <int, PostListState>{};
+  final _inFlightPages = <int, Future<PostListState>>{};
+  int _cacheGeneration = 0;
+  int _navigationVersion = 0;
+  int? _readingPage;
 
   ApiService get _apiService => ref.read(apiServiceProvider);
 
   @override
   Future<PostListState> build() async {
+    ref.onDispose(() {
+      _cacheGeneration++;
+      _navigationVersion++;
+      _pages.clear();
+      _inFlightPages.clear();
+    });
     // 与读帖同生命周期挂住评分 provider；select 常量避免 merge 触发本 Notifier 重建。
     ref.watch(threadRateLogsProvider(tid).select((_) => null));
 
@@ -158,6 +169,7 @@ class PostNotifier extends AsyncNotifier<PostListState> {
       final needsCorrection = loaded.currentPage != targetPage &&
           (listLive == null || listLive < loaded.totalReplies);
       if (needsCorrection) {
+        _readingPage = targetPage;
         loaded = await _loadPage(targetPage);
       }
     }
@@ -172,9 +184,22 @@ class PostNotifier extends AsyncNotifier<PostListState> {
   }
 
   Future<PostListState> _openByPid(String pid) async {
+    final version = _navigationVersion;
     try {
       final page = await _apiService.locatePostPage(tid, pid);
-      final loaded = await _loadPage(page);
+      if (!ref.mounted || version != _navigationVersion) {
+        throw StateError('Post navigation superseded');
+      }
+      _readingPage = page;
+      final cached = _pages[page];
+      // 目标可能是缓存之后新增的楼层；不能把旧快照中的缺失当成远端缺失。
+      final canLocateFromCache =
+          cached != null && cached.posts.any((p) => p.pid == pid);
+      final loaded = canLocateFromCache ? cached : await _loadPage(page);
+      if (canLocateFromCache) {
+        // 延后一轮，先让定位结果发布到 state。
+        unawaited(Future<void>(() => _revalidatePage(page, version)));
+      }
       final found = loaded.posts.any((p) => p.pid == pid);
       if (!found) {
         return loaded.copyWith(
@@ -187,8 +212,9 @@ class PostNotifier extends AsyncNotifier<PostListState> {
         clearLocateError: true,
       );
     } catch (e, st) {
-      if (!ref.mounted) rethrow;
+      if (!ref.mounted || version != _navigationVersion) rethrow;
       talker.handle(e, st, 'locatePid failed tid=$tid pid=$pid');
+      _readingPage = 1;
       final loaded = await _loadPage(1);
       return loaded.copyWith(
         openScrollTarget: const ScrollToPageTop(),
@@ -201,24 +227,78 @@ class PostNotifier extends AsyncNotifier<PostListState> {
     Map<String, dynamic> variables,
     ThreadPoll? poll,
   ) {
-    if (poll == null) return null;
+    if (poll == null || !ref.mounted) return poll;
     final uid = variables['member_uid']?.toString() ?? '';
     if (uid.isEmpty || uid == '0') return poll;
     final votes = ref.read(pollVoteCacheProvider(uid)).getVotes(tid);
     return votes.isEmpty ? poll : poll.withUserVotes(votes);
   }
 
-  Future<PostListState> _loadPage(int page) async {
+  Future<PostListState> _loadPage(int page) {
+    _readingPage ??= page;
+    return _inFlightPages.putIfAbsent(page, () {
+      final generation = _cacheGeneration;
+      final authorId = _filterAuthorId;
+      final authorName = _filterAuthorName;
+      late final Future<PostListState> future;
+      future = _fetchPage(page, authorId, authorName).then((loaded) {
+        if (ref.mounted &&
+            generation == _cacheGeneration &&
+            identical(_inFlightPages[page], future)) {
+          _pages[page] = loaded;
+          _trimPageCache();
+          if (_pages.containsKey(page)) _onPageLoaded(loaded);
+        }
+        return loaded;
+      }).whenComplete(() {
+        if (identical(_inFlightPages[page], future)) {
+          _inFlightPages.remove(page);
+        }
+      });
+      return future;
+    });
+  }
+
+  void _trimPageCache() {
+    if (_pages.length <= S1Constants.postSessionCacheMaxPages) return;
+    final current = _readingPage ?? _pages.keys.last;
+    _pages.removeWhere(
+      (page, _) =>
+          (page - current).abs() > S1Constants.postSessionCachePageRadius,
+    );
+    final retained = _pages.keys.toSet();
+    _inFlightPages.removeWhere((page, _) => !retained.contains(page));
+    ref.read(threadRateLogsProvider(tid).notifier).retainPages(retained);
+  }
+
+  void _clearPageCache() {
+    _cacheGeneration++;
+    _navigationVersion++;
+    _pages.clear();
+    _inFlightPages.clear();
+    ref.read(threadRateLogsProvider(tid).notifier).clear();
+  }
+
+  Future<PostListState> _fetchPage(
+    int page,
+    String? authorId,
+    String? authorName,
+  ) async {
     final result = await _apiService.getThreadDetail(
       tid,
       page: page,
-      authorId: _filterAuthorId,
+      authorId: authorId,
     );
     final posts = await ApiService.parsePostListAsync(result);
-    if (!ref.mounted) {
-      return _buildStateFromResult(result, page, posts: posts);
-    }
-    final loaded = _buildStateFromResult(result, page, posts: posts);
+    return _buildStateFromResult(result, page, posts: posts).copyWith(
+      filterAuthorId: authorId,
+      filterAuthorName: authorName,
+      clearFilter: authorId == null,
+    );
+  }
+
+  void _onPageLoaded(PostListState loaded) {
+    final page = loaded.currentPage;
     _syncSeenRepliesAfterLoad(loaded);
 
     // 评分明细只在 HTML viewthread 的 #ratelog_*；Mobile JSON 的 postlist
@@ -231,7 +311,6 @@ class PostNotifier extends AsyncNotifier<PostListState> {
         talker.handle(e, st, 'ensurePageRateLogs failed tid=$tid page=$page');
       }),
     );
-    return loaded;
   }
 
   /// 打开置顶帖时对齐 live / lastSeen（不碰阅读记录）。
@@ -278,9 +357,11 @@ class PostNotifier extends AsyncNotifier<PostListState> {
   }
 
   Future<void> locatePid(String pid) async {
+    final version = ++_navigationVersion;
     // ignore: invalid_use_of_internal_member
     state = const AsyncLoading<PostListState>().copyWithPrevious(state);
-    state = await AsyncValue.guard(() => _openByPid(pid));
+    final loaded = await AsyncValue.guard(() => _openByPid(pid));
+    if (ref.mounted && version == _navigationVersion) state = loaded;
   }
 
   /// 引用跳转返回：恢复到指定页并滚到绝对楼层（同页不重载）。
@@ -292,6 +373,8 @@ class PostNotifier extends AsyncNotifier<PostListState> {
   }) async {
     final previous = state.asData?.value;
     if (previous != null && previous.currentPage == page) {
+      _navigationVersion++;
+      _readingPage = page;
       state = AsyncValue.data(
         previous.copyWith(
           openScrollTarget: ScrollToFloor(absoluteFloor),
@@ -300,33 +383,52 @@ class PostNotifier extends AsyncNotifier<PostListState> {
       );
       return true;
     }
-    state = await AsyncValue.guard(() async {
-      final loaded = await _loadPage(page);
-      return loaded.copyWith(
-        openScrollTarget: ScrollToFloor(absoluteFloor),
-        clearLocateError: true,
-      );
-    });
-    if (state.hasError) {
-      if (previous != null) {
-        state = AsyncValue.data(previous);
-      }
-      return false;
-    }
-    return true;
+    return _showPage(page, ScrollToFloor(absoluteFloor));
   }
 
   Future<void> goToPage(int page) async {
+    await _showPage(page, const ScrollToPageTop());
+  }
+
+  /// 命中时同步展示缓存，远程校验不阻塞翻页或重置滚动落点。
+  Future<bool> _showPage(int page, OpenScrollTarget target) async {
+    final version = ++_navigationVersion;
     final previous = state.asData?.value;
-    state = await AsyncValue.guard(() async {
+    _readingPage = page;
+    final cached = _pages[page];
+    if (cached != null) {
+      state = AsyncValue.data(cached.copyWith(openScrollTarget: target));
+      unawaited(_revalidatePage(page, version));
+      return true;
+    }
+    final loaded = await AsyncValue.guard(() => _loadPage(page));
+    if (!ref.mounted || version != _navigationVersion) return false;
+    if (loaded.hasError) {
+      _readingPage = previous?.currentPage;
+      state = previous == null ? loaded : AsyncValue.data(previous);
+      return false;
+    }
+    state =
+        AsyncValue.data(loaded.requireValue.copyWith(openScrollTarget: target));
+    return true;
+  }
+
+  Future<void> _revalidatePage(int page, int version) async {
+    if (!ref.mounted || version != _navigationVersion) return;
+    try {
       final loaded = await _loadPage(page);
-      return loaded.copyWith(
-        openScrollTarget: const ScrollToPageTop(),
-        clearLocateError: true,
+      if (!ref.mounted || version != _navigationVersion) return;
+      final current = state.asData?.value;
+      if (current == null || current.currentPage != page) return;
+      state = AsyncValue.data(
+        loaded.copyWith(
+          openScrollTarget: current.openScrollTarget,
+          locateError: current.locateError,
+        ),
       );
-    });
-    if (state.hasError && previous != null) {
-      state = AsyncValue.data(previous);
+    } catch (e, st) {
+      // 校验失败时继续展示已读缓存，不用错误页打断阅读。
+      talker.handle(e, st, 'revalidatePage failed tid=$tid page=$page');
     }
   }
 
@@ -337,24 +439,34 @@ class PostNotifier extends AsyncNotifier<PostListState> {
   }
 
   Future<void> filterByAuthor(String authorId, String authorName) async {
+    _clearPageCache();
+    _readingPage = 1;
     _filterAuthorId = authorId;
     _filterAuthorName = authorName;
     state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _loadPage(1));
+    final version = _navigationVersion;
+    final loaded = await AsyncValue.guard(() => _loadPage(1));
+    if (ref.mounted && version == _navigationVersion) state = loaded;
   }
 
   Future<void> clearFilter() async {
+    _clearPageCache();
+    _readingPage = 1;
     _filterAuthorId = null;
     _filterAuthorName = null;
     state = const AsyncValue.loading();
-    state = await AsyncValue.guard(() => _loadPage(1));
+    final version = _navigationVersion;
+    final loaded = await AsyncValue.guard(() => _loadPage(1));
+    if (ref.mounted && version == _navigationVersion) state = loaded;
   }
 
   Future<void> refresh() async {
     final current = state.asData?.value.currentPage ?? 1;
+    final version = ++_navigationVersion;
     // ignore: invalid_use_of_internal_member
     state = const AsyncLoading<PostListState>().copyWithPrevious(state);
-    state = await AsyncValue.guard(() => _loadPage(current));
+    final loaded = await AsyncValue.guard(() => _loadPage(current));
+    if (ref.mounted && version == _navigationVersion) state = loaded;
   }
 
   /// 异步抓取整帖所有页面的帖子列表（供跨页引用搜索使用，不更改当前 UI 显示状态）
@@ -370,7 +482,8 @@ class PostNotifier extends AsyncNotifier<PostListState> {
     for (var p = 1; p <= maxSearchPages; p++) {
       if (p == currentState.currentPage) continue;
       try {
-        final pageState = await _loadPage(p);
+        if (!ref.mounted) break;
+        final pageState = _pages[p] ?? await _loadPage(p);
         allPosts.addAll(pageState.posts);
       } catch (e, st) {
         talker.warning('Failed to load page $p for quote search', e, st);

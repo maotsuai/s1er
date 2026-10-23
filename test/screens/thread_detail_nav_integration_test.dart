@@ -633,7 +633,7 @@ void main() {
   });
 
   testWidgets(
-      'same-thread back keeps stack and URL when restore page load fails',
+      'same-thread back keeps stack and URL when uncached restore fails',
       (tester) async {
     tester.view.physicalSize = const Size(800, 1200);
     tester.view.devicePixelRatio = 1;
@@ -726,7 +726,11 @@ void main() {
     expect(find.text('第 2 / 3 页'), findsOneWidget);
     expect(container.read(inThreadJumpStackProvider('100')), isNotEmpty);
 
-    adapter.failPages.add(1);
+    // Use an unread page: a cached return succeeds even if revalidation fails.
+    final stack = container.read(inThreadJumpStackProvider('100').notifier);
+    stack.pop();
+    stack.push(const InThreadJumpSnapshot(page: 3, absoluteFloor: 17));
+    adapter.failPages.add(3);
     await tester.tap(find.byTooltip('返回上一位置'));
     await _pumpFrames(tester, 80);
 
@@ -743,10 +747,10 @@ void main() {
     await tester.tap(find.byTooltip('返回上一位置'));
     await _pumpFrames(tester, 80);
 
-    expect(router.state.uri.queryParameters['page'], '1');
+    expect(router.state.uri.queryParameters['page'], '3');
     expect(router.state.uri.queryParameters.containsKey('pid'), isFalse);
-    expect(find.text('第 1 / 3 页'), findsOneWidget);
-    expect(find.textContaining('MARK-FLOOR-1'), findsOneWidget);
+    expect(find.text('第 3 / 3 页'), findsOneWidget);
+    expect(find.textContaining('MARK-FLOOR-17'), findsOneWidget);
     expect(container.read(inThreadJumpStackProvider('100')), isEmpty);
   });
 
@@ -840,13 +844,13 @@ void main() {
     );
     await _pumpFrames(tester, 80);
 
-    // Extra snapshot so a double-pop would empty the stack.
+    // An uncached target keeps restore pending; a double-pop would empty the stack.
     container.read(inThreadJumpStackProvider('100').notifier).push(
-          const InThreadJumpSnapshot(page: 1, absoluteFloor: 1),
+          const InThreadJumpSnapshot(page: 3, absoluteFloor: 17),
         );
     expect(container.read(inThreadJumpStackProvider('100')), hasLength(2));
 
-    adapter.delayPages.add(1);
+    adapter.delayPages.add(3);
     adapter.delayGate = Completer<void>();
 
     await tester.tap(find.byTooltip('返回上一位置'));
@@ -862,7 +866,7 @@ void main() {
       hasLength(1),
       reason: 'reentrant restore must not pop a second snapshot',
     );
-    expect(find.text('第 1 / 3 页'), findsOneWidget);
+    expect(find.text('第 3 / 3 页'), findsOneWidget);
   });
 }
 

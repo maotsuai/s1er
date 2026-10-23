@@ -85,18 +85,41 @@ class SyncSettingsSection extends ConsumerWidget {
                   ? null
                   : () => _configure(context, ref, config),
             ),
-            SwitchListTile(
-              title: const Text('启动时自动同步'),
-              subtitle: Text('每次冷启动同步一次，失败后可手动重试', style: subtitleStyle),
-              value: automation.syncOnStartup,
-              onChanged: config == null || sync.isSyncing
-                  ? null
-                  : (value) => _change(
-                        context,
-                        () => ref
-                            .read(automationSettingsProvider.notifier)
-                            .setSyncOnStartup(value),
-                      ),
+            ListTile(
+              title: const Text('自动同步'),
+              subtitle: Text(
+                '智能同步：有改动时每 7 分钟择机同步；连续 3 次网络失败后退避',
+                style: subtitleStyle,
+              ),
+              trailing: DropdownButton<WebDavAutoSyncMode>(
+                value: automation.syncMode,
+                onChanged: config == null || sync.isSyncing
+                    ? null
+                    : (mode) {
+                        if (mode != null) {
+                          _change(
+                            context,
+                            () => ref
+                                .read(automationSettingsProvider.notifier)
+                                .setSyncMode(mode),
+                          );
+                        }
+                      },
+                items: const [
+                  DropdownMenuItem(
+                    value: WebDavAutoSyncMode.off,
+                    child: Text('关闭'),
+                  ),
+                  DropdownMenuItem(
+                    value: WebDavAutoSyncMode.startup,
+                    child: Text('仅启动'),
+                  ),
+                  DropdownMenuItem(
+                    value: WebDavAutoSyncMode.smart,
+                    child: Text('智能同步'),
+                  ),
+                ],
+              ),
             ),
             ListTile(
               leading: sync.isSyncing
@@ -115,8 +138,23 @@ class SyncSettingsSection extends ConsumerWidget {
               ),
               onTap: config == null || sync.isSyncing
                   ? null
-                  : ref.read(webDavSyncProvider.notifier).sync,
+                  : () => ref.read(webDavSyncProvider.notifier).sync(),
             ),
+            if (sync.hasPendingChanges ||
+                sync.hasDeferredRefresh ||
+                sync.isPaused)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  sync.isPaused
+                      ? '自动同步已暂停，请检查配置后手动重试'
+                      : sync.hasDeferredRefresh
+                          ? '已同步，云端界面设置将在离开帖子后应用'
+                          : '有待同步改动${sync.nextAttempt == null ? '' : '，下次可同步：${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(sync.nextAttempt!.toLocal()))}'}',
+                  style: subtitleStyle,
+                ),
+              ),
             if (config != null)
               ListTile(
                 leading: const Icon(Icons.link_off),

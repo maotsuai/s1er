@@ -25,8 +25,9 @@ class S1Constants {
   static const int cookieRefreshIntervalMinutes = 30;
   static const Duration cacheExpiry = Duration(minutes: 5);
 
-  /// 读帖页状态会话缓存（离开详情后短时保留，避免返回同帖重拉）。
-  static const Duration postSessionCacheExpiry = Duration(minutes: 2);
+  /// 读帖期间超过此页数时，只保留当前页及前后各两页；退出即清空。
+  static const int postSessionCacheMaxPages = 10;
+  static const int postSessionCachePageRadius = 2;
 
   /// 帖子详情页每页帖数的兜底值。
   /// 权威来源是 API 的 `ppp` 字段（viewthread，实际为 40）；仅在拿不到

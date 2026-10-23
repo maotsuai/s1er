@@ -43,8 +43,15 @@ class _Sync extends WebDavSyncNotifier {
   @override
   WebDavSyncState build() => const WebDavSyncState();
   @override
-  Future<void> sync() async {
+  Future<void> sync({bool automatic = false}) async {
     calls++;
+  }
+
+  @override
+  void start() {
+    if (ref.read(automationSettingsProvider).syncOnStartup && calls == 0) {
+      unawaited(sync(automatic: true));
+    }
   }
 }
 

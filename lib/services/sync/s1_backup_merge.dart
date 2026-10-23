@@ -3,6 +3,20 @@ import '../backup/s1_backup_codec.dart';
 
 /// 同步层的三方合并；不改变手动导入的 v1 语义。
 class S1BackupMerge {
+  /// 比较同步数据，忽略导出时间、设备等 manifest 元数据和集合存储顺序。
+  static bool sameContents(S1BackupPayload a, S1BackupPayload b) {
+    a = _normalize(a);
+    b = _normalize(b);
+    Map<String, Object> rows(List<Map<String, dynamic>> values, String key) => {
+          for (final row in values) '${row['uid'] ?? ''}_${row[key]}': row,
+        };
+    return equal(a.settings, b.settings) &&
+        equal(rows(a.readingHistory, 'tid'), rows(b.readingHistory, 'tid')) &&
+        equal(rows(a.pollVotes, 'tid'), rows(b.pollVotes, 'tid')) &&
+        equal(rows(a.blacklist, 'uid'), rows(b.blacklist, 'uid')) &&
+        equal(rows(a.pinnedThreads, 'tid'), rows(b.pinnedThreads, 'tid'));
+  }
+
   static S1BackupPayload merge({
     required S1BackupPayload local,
     required S1BackupPayload remote,

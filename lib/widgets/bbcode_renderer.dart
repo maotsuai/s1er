@@ -25,6 +25,7 @@ import 'force_show_images.dart';
 import 'html_clickable_anchor_extension.dart';
 import 'image_viewer.dart';
 import 'scroll_pointer_gate.dart';
+import 's1_reading_swipe.dart';
 import '../models/thread_destination.dart';
 import '../utils/thread_navigation.dart';
 
@@ -167,7 +168,11 @@ class BbcodeRenderer extends ConsumerWidget {
     );
     // 仅顶层包 SelectionArea，避免引用区内嵌再包一层切断选区。
     if (quoteDepth > 0 || !selectable) return column;
-    return SelectionArea(child: column);
+    return SelectionArea(
+      onSelectionChanged: (_) =>
+          S1ReadingSwipeBlockNotification().dispatch(context),
+      child: column,
+    );
   }
 
   List<Widget> _buildParts(

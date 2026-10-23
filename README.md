@@ -87,7 +87,7 @@ S1er 是使用 Flutter 开发的第三方 Stage1st（S1）论坛客户端。基�
 - 🛡️ **数据隐私与本地备份**
   - 本地黑名单管理（支持主题列表屏蔽与楼层折叠）
   - 基于 Drift 数据库的 L1 ZIP 格式安全备份与恢复（严格排除敏感 Cookie、密码及图片缓存）
-  - WebDAV 多端手动同步与启动自动同步，复用 L1 ZIP、三方合并并校验云端版本；设置中可开启自动签到（[使用说明](docs/webdav-sync.md)）
+  - WebDAV 多端手动、启动及智能自动同步（7 分钟统一节流、连续 3 次网络失败后退避），复用 L1 ZIP、三方合并并校验云端版本；设置中可开启自动签到（[使用说明](docs/webdav-sync.md)）
   - [GitHub Actions 构建与发布](docs/ci-builds.md)：默认将 Android、Windows、Web 与未签名 iOS 包发布到本 fork 的 Release
 
 *详细能力演进与历史修补见 [CHANGELOG.md](CHANGELOG.md)。推送通知与完整无障碍支持在后续规划中。*

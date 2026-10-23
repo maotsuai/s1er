@@ -38,7 +38,6 @@ void main() {
 
     setUp(() {
       adapter = _ThreadDetailAdapter();
-      clearRateLogSessionCacheForTest();
     });
 
     tearDown(() {
@@ -312,6 +311,209 @@ void main() {
     });
   });
 
+  group('PostNotifier page cache', () {
+    late _ThreadDetailAdapter adapter;
+    late ProviderContainer container;
+    late ProviderSubscription<AsyncValue<PostListState>> subscription;
+
+    PostListState getState() =>
+        container.read(postProvider('100')).requireValue;
+    PostNotifier getNotifier() => container.read(postProvider('100').notifier);
+
+    setUp(() async {
+      adapter = _ThreadDetailAdapter()..replies = 799;
+      final dio = Dio()..httpClientAdapter = adapter;
+      container = ProviderContainer(
+        overrides: [
+          httpClientProvider
+              .overrideWith((ref) => S1HttpClient.test(container, dio)),
+          readingRecordProvider('100').overrideWithValue(null),
+        ],
+      );
+      subscription = container.listen(postProvider('100'), (_, __) {});
+      await container.read(postProvider('100').future);
+      getNotifier().clearOpenScrollTarget();
+    });
+
+    tearDown(() {
+      subscription.close();
+      container.dispose();
+    });
+
+    test('cached page appears before revalidation and receives edited content',
+        () async {
+      await getNotifier().goToPage(2);
+      final gate = adapter.pageGates[1] = Completer<void>();
+      adapter.messages[1] = 'edited remote post';
+      final notifier = getNotifier();
+      await notifier.goToPage(1);
+      expect(getState().currentPage, 1);
+      expect(getState().posts.single.message, 'body');
+      expect(getState().openScrollTarget, isA<ScrollToPageTop>());
+      notifier.clearOpenScrollTarget();
+      gate.complete();
+      await pumpEventQueue();
+      expect(adapter.requestedPages, [1, 2, 1]);
+      expect(getState().posts.single.message, 'edited remote post');
+      expect(getState().openScrollTarget, isNull);
+    });
+
+    test('failed revalidation keeps cached content without an error page',
+        () async {
+      await getNotifier().goToPage(2);
+      adapter.failPages.add(1);
+      await getNotifier().goToPage(1);
+      await pumpEventQueue();
+      expect(getState().currentPage, 1);
+      expect(getState().posts.single.message, 'body');
+      expect(container.read(postProvider('100')).hasError, isFalse);
+    });
+
+    test('late revalidation cannot replace a newer page', () async {
+      await getNotifier().goToPage(2);
+      final gate = adapter.pageGates[1] = Completer<void>();
+      await getNotifier().goToPage(1);
+      await getNotifier().goToPage(3);
+      gate.complete();
+      await pumpEventQueue();
+      expect(getState().currentPage, 3);
+    });
+
+    test('ten pages remain cached; the eleventh keeps both neighboring pairs',
+        () async {
+      for (final page in [2, 3, 4, 6, 7, 8, 9, 10, 11]) {
+        await getNotifier().goToPage(page);
+      }
+      var gate = adapter.pageGates[1] = Completer<void>();
+      await getNotifier().goToPage(1);
+      expect(getState().currentPage, 1);
+      gate.complete();
+      await pumpEventQueue();
+
+      // Page 5 is the eleventh distinct page: keep exactly 3, 4, 5, 6, 7.
+      await getNotifier().goToPage(5);
+      await pumpEventQueue();
+      for (final page in [3, 4, 6, 7]) {
+        gate = adapter.pageGates[page] = Completer<void>();
+        await getNotifier().goToPage(page);
+        expect(getState().currentPage, page);
+        gate.complete();
+        await pumpEventQueue();
+      }
+      final rateLogs = container.read(threadRateLogsProvider('100').notifier);
+      final rateRequests = adapter.rateLogRequests.length;
+      await rateLogs.ensurePageRateLogs(3);
+      expect(adapter.rateLogRequests, hasLength(rateRequests));
+      await rateLogs.ensurePageRateLogs(2);
+      expect(adapter.rateLogRequests, hasLength(rateRequests + 1));
+      for (final page in [2, 8]) {
+        gate = adapter.pageGates[page] = Completer<void>();
+        final before = getState().currentPage;
+        final loading = getNotifier().goToPage(page);
+        await pumpEventQueue();
+        expect(getState().currentPage, before);
+        gate.complete();
+        await loading;
+        expect(getState().currentPage, page);
+      }
+    });
+
+    test(
+        'a newly added pid on a cached page is checked remotely before reporting it missing',
+        () async {
+      adapter.locatePageForPid['999'] = 1;
+      await getNotifier().locatePid('999');
+      expect(adapter.requestedPages, [1, 1]);
+      expect(getState().locateError, isNull);
+      expect((getState().openScrollTarget as ScrollToPid).pid, '999');
+    });
+
+    test('an evicted in-flight revalidation cannot repopulate page caches',
+        () async {
+      for (var page = 2; page <= 10; page++) {
+        await getNotifier().goToPage(page);
+      }
+      final stale = adapter.pageGates[1] = Completer<void>();
+      await getNotifier().goToPage(1);
+      await pumpEventQueue();
+      await getNotifier().goToPage(11);
+      await pumpEventQueue();
+      final rateRequests = adapter.rateLogRequests.length;
+      stale.complete();
+      await pumpEventQueue();
+      expect(adapter.rateLogRequests, hasLength(rateRequests));
+      final gate = adapter.pageGates[1] = Completer<void>();
+      final loading = getNotifier().goToPage(1);
+      await pumpEventQueue();
+      expect(getState().currentPage, 11);
+      gate.complete();
+      await loading;
+      expect(getState().currentPage, 1);
+    });
+
+    test(
+        'restoreToFloor uses the cached page and preserves the floor during revalidation',
+        () async {
+      await getNotifier().goToPage(2);
+      final gate = adapter.pageGates[1] = Completer<void>();
+      expect(
+        await getNotifier().restoreToFloor(page: 1, absoluteFloor: 3),
+        isTrue,
+      );
+      expect(getState().currentPage, 1);
+      expect((getState().openScrollTarget as ScrollToFloor).absoluteFloor, 3);
+      gate.complete();
+      await pumpEventQueue();
+      expect((getState().openScrollTarget as ScrollToFloor).absoluteFloor, 3);
+    });
+
+    test(
+        'changing author filter cannot reuse or be overwritten by unfiltered cache',
+        () async {
+      await getNotifier().goToPage(2);
+      final gate = adapter.pageGates[1] = Completer<void>();
+      await getNotifier().goToPage(1);
+      await pumpEventQueue();
+      adapter.pageGates.remove(1);
+      await getNotifier().filterByAuthor('7', 'filtered author');
+      gate.complete();
+      await pumpEventQueue();
+      expect(getState().filterAuthorId, '7');
+      await getNotifier().clearFilter();
+      expect(getState().isFiltering, isFalse);
+      expect(adapter.requestedPages.where((page) => page == 1), hasLength(4));
+    });
+
+    test(
+        'leaving discards page and rate log caches including pending responses',
+        () async {
+      await getNotifier().goToPage(2);
+      await pumpEventQueue();
+      final gate = adapter.pageGates[1] = Completer<void>();
+      await getNotifier().goToPage(1);
+      await pumpEventQueue();
+      final oldNotifier = getNotifier();
+      subscription.close();
+      await container.pump();
+      gate.complete();
+      await pumpEventQueue();
+      adapter.pageGates.remove(1);
+      final rateRequests = adapter.rateLogRequests.length;
+      subscription = container.listen(postProvider('100'), (_, __) {});
+      await container.read(postProvider('100').future);
+      await pumpEventQueue();
+      expect(getNotifier(), isNot(same(oldNotifier)));
+      expect(adapter.rateLogRequests.length, greaterThan(rateRequests));
+      final gate2 = adapter.pageGates[2] = Completer<void>();
+      final loading = getNotifier().goToPage(2);
+      await pumpEventQueue();
+      expect(getState().currentPage, 1);
+      gate2.complete();
+      await loading;
+      expect(getState().currentPage, 2);
+    });
+  });
+
   group('PostNotifier.restoreToFloor', () {
     late _ThreadDetailAdapter adapter;
     late ProviderContainer container;
@@ -336,7 +538,6 @@ void main() {
 
     setUp(() {
       adapter = _ThreadDetailAdapter();
-      clearRateLogSessionCacheForTest();
     });
 
     tearDown(() {
@@ -429,6 +630,9 @@ class _ThreadDetailAdapter implements HttpClientAdapter {
   final locatePageForPid = <String, int>{};
   final rateLogRequests = <Uri>[];
   final failPages = <int>{};
+  final pageGates = <int, Completer<void>>{};
+  final messages = <int, String>{};
+  int replies = 159;
   Map<String, int>? commentCount;
   String rateLogHtml = '<html></html>';
   bool omitPidFromPostlist = false;
@@ -465,6 +669,7 @@ class _ThreadDetailAdapter implements HttpClientAdapter {
     if (uri.query.contains('module=viewthread')) {
       final page = int.tryParse(uri.queryParameters['page'] ?? '1') ?? 1;
       requestedPages.add(page);
+      await pageGates[page]?.future;
       if (failPages.contains(page)) {
         throw DioException(
           requestOptions: options,
@@ -479,7 +684,7 @@ class _ThreadDetailAdapter implements HttpClientAdapter {
         'thread': {
           'subject': 'Test Thread',
           'fid': '4',
-          'replies': '159',
+          'replies': replies.toString(),
           'allowreply': '1',
         },
         'postlist': [
@@ -487,7 +692,7 @@ class _ThreadDetailAdapter implements HttpClientAdapter {
             'pid': pid,
             'author': 'user',
             'authorid': '1',
-            'message': 'body',
+            'message': messages[page] ?? 'body',
             'dateline': '1700000000',
             'floor': '1',
           },

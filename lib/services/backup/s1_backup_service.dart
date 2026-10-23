@@ -195,8 +195,10 @@ class S1BackupService {
   Future<S1BackupImportResult> importPayload(
     S1BackupPayload payload, {
     bool replaceCollections = false,
+    bool notifySyncChange = true,
   }) async {
     await _local.ensureAllLoaded();
+    await _local.flushPendingWrites();
     var settingsApplied = 0;
     var historyUpserts = 0;
     var voteUpserts = 0;
@@ -310,7 +312,10 @@ class S1BackupService {
       }
     });
 
+    // 把导入事务执行期间新产生的阅读进度写回，再重载内存镜像。
+    await _local.flushPendingWrites();
     await _local.load();
+    if (notifySyncChange) _local.markSyncChanged();
 
     return S1BackupImportResult(
       readingHistoryUpserts: historyUpserts,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:s1er/providers/auth_provider.dart';
+import 'package:s1er/providers/automation_settings_provider.dart';
 import 'package:s1er/providers/settings_provider.dart';
 import 'package:s1er/providers/webdav_sync_provider.dart';
 import 'package:s1er/services/sync/webdav_credentials_store.dart';
@@ -60,8 +61,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final syncSwitch = find.widgetWithText(SwitchListTile, '启动时自动同步');
-    expect(tester.widget<SwitchListTile>(syncSwitch).onChanged, isNull);
+    final syncMode = find.byType(DropdownButton<WebDavAutoSyncMode>);
+    expect(
+      tester.widget<DropdownButton<WebDavAutoSyncMode>>(syncMode).onChanged,
+      isNull,
+    );
     await tester.tap(find.text('WebDAV 连接'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('保存'));
@@ -75,10 +79,17 @@ void main() {
     await tester.pumpAndSettle();
     expect(credentials.config?.username, 'user');
     expect(find.textContaining('secret-password'), findsNothing);
-    expect(tester.widget<SwitchListTile>(syncSwitch).onChanged, isNotNull);
-    await tester.tap(syncSwitch);
+    expect(
+      tester.widget<DropdownButton<WebDavAutoSyncMode>>(syncMode).onChanged,
+      isNotNull,
+    );
+    await tester.ensureVisible(syncMode);
+    await tester.tap(syncMode);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('智能同步').last);
     await tester.pumpAndSettle();
     expect(local.settings.get<bool>('webdav_sync_on_startup'), isTrue);
+    expect(local.settings.get<bool>('webdav_sync_while_using'), isTrue);
     final signSwitch = find.widgetWithText(SwitchListTile, '自动签到');
     await tester.ensureVisible(signSwitch);
     await tester.tap(signSwitch);
@@ -91,6 +102,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(credentials.config, isNull);
     expect(local.settings.get<bool>('webdav_sync_on_startup'), isFalse);
+    expect(local.settings.get<bool>('webdav_sync_while_using'), isFalse);
     expect(tester.takeException(), isNull);
   });
 

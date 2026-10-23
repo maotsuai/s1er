@@ -12,9 +12,15 @@ import '../http_client.dart';
 import 's1_backup_merge.dart';
 import 'webdav_metadata.dart';
 
+enum WebDavSyncFailureKind { network, conflict, configuration }
+
 class WebDavSyncException implements Exception {
-  const WebDavSyncException(this.message);
+  const WebDavSyncException(
+    this.message, {
+    this.kind = WebDavSyncFailureKind.configuration,
+  });
   final String message;
+  final WebDavSyncFailureKind kind;
   @override
   String toString() => message;
 }
@@ -98,23 +104,29 @@ class WebDavSyncService {
           _checkStatus(412);
         }
       }
-      final put = await _client.requestExternal<List<int>>(
-        url,
-        method: 'PUT',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/zip',
-          if (exists) 'If-Match': etag! else 'If-None-Match': '*',
-        },
-        data: Stream.value(upload),
-      );
-      _checkStatus(put.statusCode);
-      if (verifyContent) {
-        final saved = await _download(url, headers);
-        if (!_sameBytes(saved.bytes, upload)) {
-          throw const WebDavSyncException(
-            '云端同步文件写入后校验不一致，可能有其他设备同时同步；本机数据已保留，请稍后重试',
-          );
+      // 内容没有变化时不改写 ZIP（exported_at 每次不同，不能比较 ZIP 字节）。
+      final needsUpload =
+          remote == null || !S1BackupMerge.sameContents(merged, remote);
+      if (needsUpload) {
+        final put = await _client.requestExternal<List<int>>(
+          url,
+          method: 'PUT',
+          headers: {
+            ...headers,
+            'Content-Type': 'application/zip',
+            if (exists) 'If-Match': etag! else 'If-None-Match': '*',
+          },
+          data: Stream.value(upload),
+        );
+        _checkStatus(put.statusCode);
+        if (verifyContent) {
+          final saved = await _download(url, headers);
+          if (!_sameBytes(saved.bytes, upload)) {
+            throw const WebDavSyncException(
+              '云端同步文件写入后校验不一致，可能有其他设备同时同步；本机数据已保留，请稍后重试',
+              kind: WebDavSyncFailureKind.conflict,
+            );
+          }
         }
       }
 
@@ -122,7 +134,13 @@ class WebDavSyncService {
       final current = await snapshot();
       final apply =
           S1BackupMerge.merge(local: current, remote: merged, base: local);
-      await _backup.importPayload(apply, replaceCollections: true);
+      if (!S1BackupMerge.sameContents(current, apply)) {
+        await _backup.importPayload(
+          apply,
+          replaceCollections: true,
+          notifySyncChange: false,
+        );
+      }
       await _local.settings.putAsync(baselineKey, {
         'target': config.targetId,
         'zip': base64Encode(upload),
@@ -136,8 +154,11 @@ class WebDavSyncService {
       }.contains(e.type);
       throw WebDavSyncException(
         timedOut
-            ? 'WebDAV 请求超时，请检查网络后手动重试'
+            ? 'WebDAV 请求超时，请检查网络后重试'
             : '无法连接 WebDAV，请检查地址、网络和证书；Web 端还需配置 CORS',
+        kind: timedOut || e.type == DioExceptionType.connectionError
+            ? WebDavSyncFailureKind.network
+            : WebDavSyncFailureKind.configuration,
       );
     } on S1BackupException catch (e) {
       throw WebDavSyncException('同步文件无效：${e.message}');
@@ -249,13 +270,22 @@ class WebDavSyncService {
     final message = switch (status) {
       401 || 403 => 'WebDAV 认证失败或没有读写权限，请检查用户名和应用专用密码',
       404 || 409 => 'WebDAV 目录不存在，请先在服务器创建该目录',
-      412 => '另一台设备刚更新了同步文件，本次未覆盖，请手动重试',
+      412 => '另一台设备刚更新了同步文件，本次未覆盖，将重新读取后同步',
       423 => '云端同步文件已锁定，请稍后手动重试',
       507 => 'WebDAV 存储空间不足',
       int code when code >= 300 && code < 400 =>
         'WebDAV 地址发生重定向，请填写重定向后的完整目录地址',
       _ => 'WebDAV 同步失败（HTTP ${status ?? '未知'}）',
     };
-    throw WebDavSyncException(message);
+    throw WebDavSyncException(
+      message,
+      kind: switch (status) {
+        412 || 423 => WebDavSyncFailureKind.conflict,
+        408 || 429 => WebDavSyncFailureKind.network,
+        int code when code >= 500 && code != 507 =>
+          WebDavSyncFailureKind.network,
+        _ => WebDavSyncFailureKind.configuration,
+      },
+    );
   }
 }
