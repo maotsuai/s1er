@@ -52,7 +52,7 @@
 | Lint | flutter_lints | ^6.0.0 |
 | 运行环境 | Flutter SDK >=3.4 | 支持 Web / Android / iOS / Windows / macOS / Linux |
 
-> Cookie 走 `PersistCookieJar` + 加密存储，不进 Drift、不进 `s1-backup`。不使用 Hive。
+> Cookie 走 `PersistCookieJar` + 加密存储；App API 的 sid 走独立 `FlutterSecureStorage` 槽。两者不进 Drift、不进 `s1-backup`。不使用 Hive。
 
 ---
 
@@ -153,7 +153,7 @@ lib/
 ## 安全边界
 
 - Secrets 管理方式：API 地址硬编码于 `ApiConfig`（公开论坛 API，无密钥）；用户凭据通过 API 登录表单提交，不在客户端持久化明文密码
-- 认证方案：Cookie-based（Discuz! 原生 Cookie 认证） + formhash CSRF 防护
+- 认证方案：App API sid + Discuz! 原生 Cookie 双登录态；普通读帖优先 app，单次失败回退 mobile；Cookie 写操作保留 formhash CSRF 防护。协议与回退范围见 `docs/dual-login.md`。
 - 敏感数据范围：用户 Cookie（auth/session）通过 `PersistCookieJar` 加密存储；用户密码仅在登录请求中传输，不本地持久化
 - CSRF 防护：`S1HttpClient` 自动从响应提取 formhash 并注入后续 POST 请求
 - 速率限制：`S1HttpClient` 内置每秒最多 2 个请求的限速，保护 S1 服务器
@@ -241,7 +241,7 @@ flutter run -d chrome --dart-define=TALKER_LOG_LEVEL=all --dart-define=TALKER_MA
 
 - flutter_html 已对齐稳定 `^3.0.0`；大版本升级时仍需回归帖子 HTML/BBCode 渲染
 - Web 端受 CORS 限制，开发时需启动 `scripts/proxy_server.dart` 代理服务器
-- 登录流程：全平台统一走 API 表单登录（`ApiService.login()`）；Web 端需配合 CORS 代理
+- 登录流程：全平台由 `AuthService.login()` 编排 app / mobile 两次表单登录，一次输入同时取得两套持久凭据；只完成一套时清理并提示失败。旧 Cookie 会话可继续使用，重新输入密码后升级；Web 端需配合 CORS 代理（代理 Cookie 仅随进程保留）。
 - 本地结构化数据（settings / reading_history / poll_votes / blacklist 表）走 Drift；Cookie 走加密 `PersistCookieJar`。无 Hive。
 - Native 图片使用 `flutter_cache_manager` 磁盘缓存；Web 主要依赖浏览器缓存。备份**禁止**包含图片缓存
 - 跨客户端备份格式：`docs/backup-format-v1.md`（默认仅 L1 JSON ZIP；`native/` L2 可选且未作为默认导出）

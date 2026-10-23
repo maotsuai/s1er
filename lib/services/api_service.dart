@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, compute;
 import '../config/api_config.dart';
 import '../models/thread.dart';
+import '../models/app_session.dart';
 import '../models/post.dart';
 import '../models/user_space_item.dart';
 import '../models/quote_info.dart';
@@ -50,7 +51,7 @@ class ApiService {
     if (data is Map<String, dynamic>) return data;
     if (data is String) {
       final trimmed = data.trimLeft();
-      if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html')) {
+      if (trimmed.startsWith('<')) {
         // 1) Discuz 提示页：把服务器原文搬运给用户。
         final official = ServerNotice.fromResponseBody(data);
         if (official != null) throw ServerMaintenanceException(official);
@@ -129,6 +130,20 @@ class ApiService {
     final apiError = DiscuzParser.extractApiErrorMessage(json);
     if (apiError != null) {
       throw ServerMaintenanceException(apiError);
+    }
+    final message = json['Message'];
+    if (message is Map &&
+        ((message['messageval']?.toString().isNotEmpty ?? false) ||
+            DiscuzParser.extractDiscuzMessageError(json) != null) &&
+        !(message['messageval']?.toString().contains('succeed') ?? false) &&
+        !(message['messageval']?.toString().endsWith('_success') ?? false)) {
+      throw ServerMaintenanceException(
+        friendlyDiscuzApiError(
+          messageval: message['messageval']?.toString(),
+          messagestr: message['messagestr']?.toString(),
+          fallback: '服务器未返回内容，请稍后重试',
+        ),
+      );
     }
   }
 
@@ -554,6 +569,53 @@ class ApiService {
     int page = 1,
     String? authorId,
   }) async {
+    final session = _httpClient.appSessions.current;
+    // app 不支持 authorid，不能把未过滤的数据当成“只看某作者”。
+    if (session != null && (authorId == null || authorId.isEmpty)) {
+      try {
+        final pageData = await _postApp(
+          'thread/page',
+          {'tid': tid, 'pageNo': '$page'},
+          session: session,
+        );
+        final thread = await _postApp('thread', {'tid': tid}, session: session);
+        final adapted = DiscuzParser.adaptAppThreadPage(
+          pageData: pageData,
+          thread: thread,
+          tid: tid,
+          page: page,
+          uid: session.uid,
+        );
+        // 投票表单继续由 mobile 提供，避免丢失投票权限/选项。
+        if (page == 1 && thread['special']?.toString() == '1') {
+          try {
+            final mobile = await _getMobileThreadDetail(tid, page: page);
+            final vars = mobile['Variables'] as Map<String, dynamic>?;
+            (adapted['Variables'] as Map<String, dynamic>)['special_poll'] =
+                vars?['special_poll'];
+          } catch (e) {
+            talker.warning('Poll form unavailable (${e.runtimeType})');
+          }
+        }
+        if (!identical(_httpClient.appSessions.current, session)) {
+          throw const FormatException('登录态已变更，请重试');
+        }
+        return adapted;
+      } catch (e) {
+        // 不输出异常体/请求表单，sid 不得进入日志。临时故障不清除 sid。
+        talker.warning(
+          'App read failed (${e.runtimeType}); trying mobile once',
+        );
+      }
+    }
+    return _getMobileThreadDetail(tid, page: page, authorId: authorId);
+  }
+
+  Future<Map<String, dynamic>> _getMobileThreadDetail(
+    String tid, {
+    int page = 1,
+    String? authorId,
+  }) async {
     final params = <String, String>{
       'tid': tid,
       'page': page.toString(),
@@ -571,6 +633,55 @@ class ApiService {
     return json;
   }
 
+  Future<Map<String, dynamic>> _postApp(
+    String endpoint,
+    Map<String, String> fields, {
+    AppSession? session,
+  }) async {
+    final response = await _httpClient.post(
+      '${ApiConfig.appApiUrl}$endpoint',
+      data: <String, String>{
+        ...fields,
+        if (session != null) 'sid': session.sid,
+      },
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        responseType: ResponseType.plain,
+        extra: const {'s1SkipFormhash': true},
+      ),
+    );
+    final json = ensureJson(response.data);
+    final code = int.tryParse(json['code']?.toString() ?? '');
+    if (json['success'] != true || code != 200) {
+      if (session != null && (code == 501 || code == 503)) {
+        await _httpClient.appSessions.clear(expected: session);
+      }
+      throw ServerMaintenanceException(
+        json['message']?.toString() ?? 'App 接口请求失败，请稍后重试',
+      );
+    }
+    final data = json['data'];
+    if (data is! Map<String, dynamic>) {
+      throw const FormatException('App 接口未返回数据');
+    }
+    return data;
+  }
+
+  Future<AppSession> loginApp(
+    String username,
+    String password, {
+    int questionId = 0,
+    String answer = '',
+  }) async {
+    final data = await _postApp('user/login', {
+      'username': username,
+      'password': password,
+      'questionid': '$questionId',
+      'answer': questionId == 0 ? '' : answer,
+    });
+    return AppSession.fromJson(data);
+  }
+
   /// 按 tid 拉取第 1 页并只返回回复数（完整 viewthread，客户端只解析 replies）。
   Future<int?> fetchThreadReplies(String tid) async {
     final result = await getThreadDetail(tid, page: 1);
@@ -585,6 +696,7 @@ class ApiService {
     String password, {
     int questionId = 0,
     String answer = '',
+    String? expectedUid,
   }) async {
     try {
       // 1. 发起 GET 请求以获取当前会话的 formhash
@@ -662,6 +774,10 @@ class ApiService {
 
           if (messageval == 'login_succeed' ||
               messageval?.contains('succeed') == true) {
+            final uid = dataMap['Variables']?['member_uid']?.toString();
+            if (expectedUid != null && uid != null && uid != expectedUid) {
+              return '两种登录返回的账号不一致，请重新登录';
+            }
             await _httpClient.refreshFormhashAfterAuth();
             return null; // 登录成功
           }
@@ -1122,6 +1238,40 @@ class ApiService {
   }
 
   Future<User?> getUserProfile() async {
+    final session = _httpClient.appSessions.current;
+    if (session != null) {
+      try {
+        final response = await _httpClient.get(
+          '${ApiConfig.appApiUrl}user',
+          queryParameters: {'uid': session.uid},
+          options: Options(responseType: ResponseType.plain),
+        );
+        final json = ensureJson(response.data);
+        final data = json['data'];
+        if (json['success'] == true &&
+            json['code']?.toString() == '200' &&
+            data is Map<String, dynamic> &&
+            data['uid']?.toString() == session.uid) {
+          final user = User.fromJson({...data, 'avatar': data['avatarurl']});
+          // app/user 不提供发帖、好友等统计，继续从现有 profile 补齐。
+          final detail = await getUserProfileByUid(session.uid);
+          if (detail == null) return user;
+          return user.copyWith(
+            posts: detail.posts,
+            threads: detail.threads,
+            friends: detail.friends,
+            follower: detail.follower,
+            following: detail.following,
+            oltime: detail.oltime,
+            combat: detail.combat,
+            deadfish: detail.deadfish,
+            regdate: detail.regdate,
+          );
+        }
+      } catch (e) {
+        talker.warning('App profile failed (${e.runtimeType}); trying mobile');
+      }
+    }
     try {
       final url = buildApiUrl(module: ApiConfig.moduleForumIndex);
       final response = await _httpClient.get(url);

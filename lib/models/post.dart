@@ -22,9 +22,10 @@ class Post {
       dateline: int.tryParse(json['dbdateline']?.toString() ?? '') ?? 0,
       floor: int.tryParse(json['number']?.toString() ?? '') ?? 0,
       isFirst: json['first']?.toString() == '1',
-      avatar: User.resolveAvatarUrl(
-        'https://avatar.stage1st.com/avatar.php?uid=${json['authorid']}&size=small',
-      ),
+      avatar: json['avatar']?.toString() ??
+          User.resolveAvatarUrl(
+            'https://avatar.stage1st.com/avatar.php?uid=${json['authorid']}&size=small',
+          ),
     );
   }
   final String pid;
