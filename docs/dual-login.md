@@ -55,5 +55,18 @@ flutter build web --release
 [AppService](https://github.com/ykrank/S1-Next/blob/master/app/src/main/java/me/ykrank/s1next/data/api/app/AppService.kt)、
 [AppPostsWrapper](https://github.com/ykrank/S1-Next/blob/master/app/src/main/java/me/ykrank/s1next/data/api/app/model/AppPostsWrapper.kt)
 和 [AppThread](https://github.com/ykrank/S1-Next/blob/master/app/src/main/java/me/ykrank/s1next/data/api/app/model/AppThread.kt)。
-真实 sid 的有效期、是否轮换、受限版块权限和不同分页大小仍需真实账号联调；
-本次未向真实论坛重复登录或写入。
+真实 sid 的有效期、是否轮换和不同分页大小仍需进一步验证。
+
+## 真实账号联调（2026-10-24）
+
+本地 Web release 构建使用用户在页面中填写的凭据完成了一次双登录，随后复用
+会话浏览 VTB（fid=151）的「【B92】VUP综合讨论楼」（tid=2288813）：
+
+- 第 965、966、967 页均显示正文，页内滚动正常。
+- 末页可滚动到第 38671 楼；验证时共 967 页。
+- 代理日志确认读帖走 app/thread/page + app/thread，未发生 mobile/viewthread
+  回退，无代理错误。本次未发表、回复或进行其它论坛内容写操作。
+
+起初出现的“无法连接网络”由临时预览服务随工具会话退出导致，登录请求尚未
+到达论坛。代理和静态服务改为独立进程启动后，使用原页面表单登录成功。
+联调文档和截图均未保存密码、sid 或 Cookie 值。
