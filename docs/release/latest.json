@@ -1,20 +1,20 @@
 {
   "latest": "0.9.1",
   "minSupported": "0.3.2",
-  "notes": "Beta — 0.9.1：下载响应缺少 ETag 时补查 WebDAV 文件属性，避免直接中断同步；同步保留条件上传与前后内容校验，兼容更多无引号 ETag 格式",
+  "notes": "Beta — 0.9.1：重新登录后启用新的读帖通道，兼容权限版块和大帖末页浏览；读帖失败时自动尝试备用通道，偶发网络故障不清除已有登录态",
   "publishedAt": "2026-10-24",
   "channels": {
     "github": "https://github.com/maotsuai/s1er/releases/latest",
-    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+19/s1er-0.9.1%2B19-android-universal.apk",
-    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+19/s1er-0.9.1%2B19-android-arm64-v8a.apk",
-    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+19/s1er-0.9.1%2B19-android-armeabi-v7a.apk",
-    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+19/s1er-0.9.1%2B19-android-x86_64.apk",
+    "androidApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+20/s1er-0.9.1%2B20-android-universal.apk",
+    "androidArm64V8aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+20/s1er-0.9.1%2B20-android-arm64-v8a.apk",
+    "androidArmeabiV7aApk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+20/s1er-0.9.1%2B20-android-armeabi-v7a.apk",
+    "androidX8664Apk": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+20/s1er-0.9.1%2B20-android-x86_64.apk",
     "androidNetdisk": null,
     "netdiskHint": null,
-    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+19/s1er-0.9.1%2B19-windows-x64.zip",
+    "windows": "https://github.com/maotsuai/s1er/releases/download/v0.9.1+20/s1er-0.9.1%2B20-windows-x64.zip",
     "linux": null,
     "macos": null,
-    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.9.1+19",
+    "ios": "https://github.com/maotsuai/s1er/releases/tag/v0.9.1+20",
     "play": null
   }
 }
