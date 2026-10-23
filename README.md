@@ -68,8 +68,8 @@ S1er 是使用 Flutter 开发的第三方 Stage1st（S1）论坛客户端。基�
   - 高性能 BBCode 解析与 HTML 优化渲染，支持引用深度跳转与回复恢复
   - 内置完整麻将脸表情贴图（`assets/emoticons/` Local-First 加载）
 - 🔑 **账号与会话管理**
-  - API 表单登录（支持 Discuz 安全提问解答）与个人资料查看
-  - 基于加密存储的 Cookie 会话自动恢复与 Formhash CSRF 安全防护
+  - 一次表单登录同时取得 App sid 与 Cookie（支持 Discuz 安全提问解答），普通读帖优先 App、失败后尝试 Mobile
+  - 两套凭据独立加密保存、自动恢复与退出清理；Cookie 写操作保留 Formhash CSRF 安全防护（[协议说明](docs/dual-login.md)）
 - ✏️ **发帖与互动**
   - 回复帖子、发表新帖、编辑已发帖子、发帖草稿箱自动保存
   - 投票、评分与楼层违规举报；插图默认 Discuz 论坛附件（支持 `p.sda1.dev` 外链备选）
@@ -86,7 +86,7 @@ S1er 是使用 Flutter 开发的第三方 Stage1st（S1）论坛客户端。基�
   - 桌面端支持固定目录导出与另存为对话框
 - 🛡️ **数据隐私与本地备份**
   - 本地黑名单管理（支持主题列表屏蔽与楼层折叠）
-  - 基于 Drift 数据库的 L1 ZIP 格式安全备份与恢复（严格排除敏感 Cookie、密码及图片缓存）
+  - 基于 Drift 数据库的 L1 ZIP 格式安全备份与恢复（严格排除敏感 Cookie、sid、密码及图片缓存）
   - WebDAV 多端手动、启动及智能自动同步（7 分钟统一节流、连续 3 次网络失败后退避），复用 L1 ZIP、三方合并并校验云端版本；设置中可开启自动签到（[使用说明](docs/webdav-sync.md)）
   - [GitHub Actions 构建与发布](docs/ci-builds.md)：默认将 Android、Windows、Web 与未签名 iOS 包发布到本 fork 的 Release
 

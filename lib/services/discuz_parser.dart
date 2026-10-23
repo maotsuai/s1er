@@ -54,13 +54,18 @@ abstract final class DiscuzParser {
   /// Variables 恒为对象；攻击者可拟制的裸键名不足以把任意 JSON 骗成成功
   /// 数据）。`error` 键只走向失败/报错文案，保留宽松判定是安全的。
   static Map<String, dynamic>? rescueJsonFromHtml(String html) {
-    final start = html.indexOf('{');
+    final start = RegExp(r'\{\s*"(?:Version|Variables|error|success)"')
+            .firstMatch(html)
+            ?.start ??
+        -1;
     final end = html.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
     try {
       final decoded = jsonDecode(html.substring(start, end + 1));
       if (decoded is Map<String, dynamic> &&
-          (decoded['Variables'] is Map || decoded.containsKey('error'))) {
+          (decoded['Variables'] is Map ||
+              decoded.containsKey('error') ||
+              (decoded['success'] is bool && decoded['code'] is num))) {
         // 救援通道本应低频命中；记录便于观测误判（把非 API HTML 里的
         // 花括号区间当成了成功响应）。
         talker.warning(
@@ -123,10 +128,63 @@ abstract final class DiscuzParser {
   // ===========================================================================
 
   static bool hasThreadDetailData(Map<String, dynamic> json) {
-    final variables = json['Variables'] as Map<String, dynamic>?;
-    if (variables == null) return false;
-    if (variables['thread'] is Map<String, dynamic>) return true;
     return parsePostList(json).isNotEmpty;
+  }
+
+  /// 把 app 的分页正文与主题元信息适配到现有读帖数据流。
+  /// totalCount 已含首楼，不能再加一；HTML 正文保持原样。
+  static Map<String, dynamic> adaptAppThreadPage({
+    required Map<String, dynamic> pageData,
+    required Map<String, dynamic> thread,
+    required String tid,
+    required int page,
+    required String uid,
+  }) {
+    final pageNo = int.tryParse(pageData['pageNo']?.toString() ?? '');
+    final pageSize = int.tryParse(pageData['pageSize']?.toString() ?? '');
+    final totalCount = int.tryParse(pageData['totalCount']?.toString() ?? '');
+    final list = pageData['list'];
+    if (pageNo != page ||
+        pageSize == null ||
+        pageSize <= 0 ||
+        totalCount == null ||
+        totalCount < 1 ||
+        list is! List ||
+        list.isEmpty ||
+        thread['tid']?.toString() != tid ||
+        (thread['fid']?.toString() ?? '').isEmpty ||
+        (thread['subject']?.toString() ?? '').isEmpty) {
+      throw const FormatException('App 读帖响应不完整');
+    }
+    final posts = list.map((raw) {
+      if (raw is! Map) throw const FormatException('App 楼层格式错误');
+      final post = Map<String, dynamic>.from(raw);
+      final position = int.tryParse(post['position']?.toString() ?? '');
+      if ((post['pid']?.toString() ?? '').isEmpty ||
+          position == null ||
+          position < 1 ||
+          post['message'] is! String) {
+        throw const FormatException('App 楼层数据不完整');
+      }
+      return <String, dynamic>{
+        ...post,
+        'number': position,
+        'first': position == 1 ? '1' : '0',
+        'dbdateline': post['dateline'],
+        'avatar': post['avatarurl'],
+      };
+    }).toList();
+    return {
+      'Variables': <String, dynamic>{
+        'member_uid': uid,
+        'ppp': pageSize,
+        'thread': <String, dynamic>{
+          ...thread,
+          'replies': totalCount - 1,
+        },
+        'postlist': posts,
+      },
+    };
   }
 
   static Map<String, String> parseThreadTypes(Map<String, dynamic> json) {

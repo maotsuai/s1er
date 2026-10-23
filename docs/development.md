@@ -28,6 +28,8 @@ flutter run -d <device-id>
 
 原生端登录 Cookie 通过 `PersistCookieJar` 持久化，落盘内容使用 AES-256-GCM 加密，密钥保存在系统安全存储中。
 
+登录还会取得 `/api/app/user/login` 返回的 sid，独立保存在 `FlutterSecureStorage`；普通读帖优先使用 app，失败后尝试一次 mobile。两套凭据不进入备份，密码和安全提问答案不落盘。旧 Cookie 用户重新登录后可启用 app 通道，详见[双登录态](dual-login.md)。Web 的 sid 持久化在浏览器安全存储中，备用 Cookie 仍依赖本地代理进程，重启代理后需重新登录以恢复备用通道。
+
 ## iOS 构建与运行
 
 > **性能警告（置顶）**：`flutter run` 与 Xcode **Debug** 配置编译出的是 **debug 包**（Dart JIT、未优化、调试断言全开），iPhone 上滚动卡顿是**预期行为**，不代表应用真实性能。体验、回帖反馈与性能排查一律使用 **Release** 或 **Profile** 包。设置页「版本」一行会显示当前构建模式（`Debug` / `Profile` / `Release`），可先看这里确认装的是哪种包。

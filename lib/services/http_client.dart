@@ -13,6 +13,7 @@ import '../config/env_config.dart';
 import '../config/resource_domains.dart';
 import 'formhash_service.dart';
 import 'encrypted_cookie_storage.dart';
+import 'app_session_store.dart';
 import 'talker.dart';
 import '../models/app_exceptions.dart';
 import 's1_http_event.dart';
@@ -21,6 +22,7 @@ import '../utils/server_notice.dart';
 class S1HttpClient {
   S1HttpClient(this._ref)
       : _testContainer = null,
+        appSessions = AppSessionStore(),
         _now = DateTime.now,
         _delay = _defaultDelay;
 
@@ -30,7 +32,11 @@ class S1HttpClient {
     Dio dio, {
     DateTime Function()? now,
     Future<void> Function(Duration)? delay,
+    AppSessionStore? appSessions,
+    PersistCookieJar? cookieJar,
   })  : _ref = null,
+        appSessions = appSessions ?? AppSessionStore(),
+        _cookieJar = cookieJar,
         _dio = dio,
         _initialized = true,
         _now = now ?? DateTime.now,
@@ -41,6 +47,7 @@ class S1HttpClient {
   PersistCookieJar? _cookieJar;
   final List<DateTime> _apiRequestTimestamps = [];
   final List<DateTime> _mediaRequestTimestamps = [];
+  final AppSessionStore appSessions;
   final Ref? _ref;
   final ProviderContainer? _testContainer;
   final DateTime Function() _now;
@@ -64,6 +71,12 @@ class S1HttpClient {
   bool get isInitialized => _initialized;
 
   Future<void> init() async {
+    try {
+      await appSessions.load();
+    } catch (e) {
+      talker
+          .warning('App session unavailable (${e.runtimeType}); using mobile');
+    }
     if (!_isWeb) {
       final appDocDir = await getApplicationDocumentsDirectory();
       final cookiePath = '${appDocDir.path}/.cookies/';
@@ -286,6 +299,10 @@ class S1HttpClient {
 
   Future<Response> post(String url, {dynamic data, Options? options}) {
     return _dio.post(url, data: data, options: options);
+  }
+
+  Future<void> clearCookies() async {
+    await _cookieJar?.deleteAll();
   }
 
   /// 外部存储使用独立传输，复用限流与超时，但隔离论坛 Cookie、formhash、

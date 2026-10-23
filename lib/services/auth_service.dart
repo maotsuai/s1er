@@ -15,6 +15,8 @@ class AuthService {
 
   User? _currentUser;
   bool _isLoggedIn = false;
+  int _authRevision = 0;
+  bool _loginInProgress = false;
 
   User? get currentUser => _currentUser;
   bool get isLoggedIn => _isLoggedIn;
@@ -31,32 +33,72 @@ class AuthService {
     int questionId = 0,
     String answer = '',
   }) async {
+    if (_loginInProgress) return '正在登录，请稍候';
+    _loginInProgress = true;
     try {
+      await logout();
+      final revision = _authRevision;
       final apiService = ApiService(_httpClient);
-      final error = await apiService.login(
+      final session = await apiService.loginApp(
         username,
         password,
         questionId: questionId,
         answer: answer,
       );
+      if (revision != _authRevision) {
+        await logout();
+        return '登录已取消';
+      }
+      final error = await apiService.login(
+        username,
+        password,
+        questionId: questionId,
+        answer: answer,
+        expectedUid: session.uid,
+      );
+      if (revision != _authRevision) {
+        await logout();
+        return '登录已取消';
+      }
 
       if (error == null) {
+        await _httpClient.appSessions.save(session);
+        if (revision != _authRevision) {
+          await logout();
+          return '登录已取消';
+        }
         _isLoggedIn = true;
-        _currentUser = User(uid: '', username: username);
+        _currentUser = User(uid: session.uid, username: session.username);
         await _fetchProfile();
+        if (revision != _authRevision) return '登录已取消';
         return null;
       }
-      return error;
-    } catch (e, st) {
-      return friendlyError(e, '登录', st);
+      await logout();
+      return '备用登录失败：$error';
+    } catch (e) {
+      talker.warning('Dual login failed (${e.runtimeType})');
+      try {
+        await logout();
+      } catch (cleanupError) {
+        talker.warning('Login cleanup failed (${cleanupError.runtimeType})');
+      }
+      return userFacingError(e);
+    } finally {
+      _loginInProgress = false;
     }
   }
 
   Future<User?> _fetchProfile() async {
+    final revision = _authRevision;
     try {
       final apiService = ApiService(_httpClient);
       final profile = await apiService.getUserProfile();
-      if (profile != null) {
+      if (profile != null && revision == _authRevision) {
+        final session = _httpClient.appSessions.current;
+        if (session != null && session.uid != profile.uid) {
+          talker.warning('Ignoring profile for a different account');
+          return null;
+        }
         _currentUser = profile;
         return profile;
       }
@@ -71,6 +113,17 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    _authRevision++;
+    _currentUser = null;
+    _isLoggedIn = false;
+    try {
+      await _httpClient.appSessions.clear();
+    } finally {
+      await _clearMobileSession();
+    }
+  }
+
+  Future<void> _clearMobileSession() async {
     if (kIsWeb) {
       try {
         const proxyUrl =
@@ -85,27 +138,44 @@ class AuthService {
         );
       } catch (e, st) {
         talker.handle(e, st, 'Clear proxy session failed');
+        rethrow;
       }
     }
-    _currentUser = null;
-    _isLoggedIn = false;
     if (!kIsWeb) {
-      await _httpClient.cookieJar.deleteAll();
+      await _httpClient.clearCookies();
     }
   }
 
   Future<bool> checkSession() async {
+    final revision = _authRevision;
     final apiService = ApiService(_httpClient);
+
+    try {
+      final session = await _httpClient.appSessions.load();
+      if (revision != _authRevision) return false;
+      if (session != null) {
+        _currentUser = User(uid: session.uid, username: session.username);
+        _isLoggedIn = true;
+        // user 是公开资料接口，不能用于验证 sid；由首次鉴权读帖处理过期。
+        unawaited(_fetchProfile());
+        return true;
+      }
+    } catch (e) {
+      talker.warning('Restore app session failed (${e.runtimeType})');
+    }
 
     // 1. 优先通过 API 验证会话（Cookie 由 CookieManager 自动附加）
     try {
       final profile = await apiService.getUserProfile();
+      if (revision != _authRevision) return false;
       if (profile != null && profile.uid.isNotEmpty && profile.uid != '0') {
         _currentUser = profile;
         _isLoggedIn = true;
         return true;
       }
-    } catch (_) {}
+    } catch (e) {
+      talker.warning('Restore mobile session failed (${e.runtimeType})');
+    }
 
     // 2. API 验证失败时，检查本地 PersistCookieJar 中是否有 auth Cookie
     //    尝试多个路径以覆盖 Discuz 不同的 Cookie Path 设置
@@ -117,6 +187,7 @@ class AuthService {
       ];
       for (final uri in urls) {
         final cookies = await _httpClient.cookieJar.loadForRequest(uri);
+        if (revision != _authRevision) return false;
         final hasAuth =
             cookies.any((c) => c.name.endsWith('auth') && c.value.isNotEmpty);
         if (hasAuth) {
@@ -133,7 +204,9 @@ class AuthService {
           return true;
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      talker.warning('Read saved cookies failed (${e.runtimeType})');
+    }
     return false;
   }
 }

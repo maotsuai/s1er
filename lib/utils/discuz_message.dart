@@ -80,6 +80,8 @@ const Map<String, String> _apiKeyMessages = {
   'post_reply_nopermission': '您没有权限回复该主题',
   'replyperm_login_nopermission': '请先登录后再回复',
   'postperm_login_nopermission': '请先登录后再发帖',
+  'viewperm_login_nopermission': '该版块需要登录且具备相应权限才能查看',
+  'viewperm_nopermission': '您没有权限查看该版块或主题',
   'thread_nonexistence': '抱歉，指定的主题不存在或已被删除',
   'post_nonexistence': '抱歉，指定的帖子不存在或已被删除',
   'forum_nonexistence': '抱歉，指定的版块不存在',
@@ -94,7 +96,7 @@ String normalizeDiscuzMessageKey(String? raw) {
   if (text.startsWith('mobile:')) {
     text = text.substring('mobile:'.length);
   }
-  return text;
+  return text.split('//').first;
 }
 
 /// 形如 `login_invalid` / `mobile:login_invalid` 的技术 key。
