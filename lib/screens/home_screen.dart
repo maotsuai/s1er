@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,7 +17,6 @@ import '../providers/server_notice_provider.dart';
 import '../models/favorite_item.dart';
 import '../models/forum_category.dart';
 import '../models/notice_item.dart';
-import '../theme/app_theme.dart';
 import '../theme/s1_haptics.dart';
 import '../utils/forum_index_view.dart';
 import '../utils/home_root_back.dart';
@@ -44,6 +44,7 @@ import '../utils/window_size.dart';
 import 'messages_screen.dart';
 import 'search_screen.dart';
 import 'profile_screen.dart';
+import '../theme/s1_mouse_cursors.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -258,56 +259,59 @@ class _HomeScreenBodyState extends ConsumerState<_HomeScreenBody> {
         bottomNavigationBar: router != null && context.isMediumOrAbove
             ? null
             : S1HomeNavChrome(
-                child: NavigationBar(
-                  selectedIndex: selectedTab,
-                  onDestinationSelected: (index) {
-                    S1Haptics.selection();
-                    if (selectedTab == 2 && index != 2) {
-                      ref.read(messagesSegmentProvider.notifier).select(0);
-                    }
-                    if (router == null) {
-                      setState(() => _fallbackTab = index);
-                      return;
-                    }
-                    final tabs = isLoggedIn
-                        ? const ['forum', 'search', 'messages', 'profile']
-                        : const ['forum', 'profile'];
-                    final tab = tabs[index];
-                    context.go(tab == 'forum' ? '/' : '/?tab=$tab');
-                  },
-                  destinations: isLoggedIn
-                      ? [
-                          const NavigationDestination(
-                            icon: Icon(Icons.forum),
-                            label: '论坛',
-                          ),
-                          const NavigationDestination(
-                            icon: Icon(Icons.search),
-                            label: '搜索',
-                          ),
-                          NavigationDestination(
-                            icon: Badge(
-                              label: Text(unreadDisplay),
-                              isLabelVisible: unreadTotal > 0,
-                              child: const Icon(Icons.message),
+                child: MouseRegion(
+                  cursor: S1MouseCursors.clickable,
+                  child: NavigationBar(
+                    selectedIndex: selectedTab,
+                    onDestinationSelected: (index) {
+                      S1Haptics.selection();
+                      if (selectedTab == 2 && index != 2) {
+                        ref.read(messagesSegmentProvider.notifier).select(0);
+                      }
+                      if (router == null) {
+                        setState(() => _fallbackTab = index);
+                        return;
+                      }
+                      final tabs = isLoggedIn
+                          ? const ['forum', 'search', 'messages', 'profile']
+                          : const ['forum', 'profile'];
+                      final tab = tabs[index];
+                      context.go(tab == 'forum' ? '/' : '/?tab=$tab');
+                    },
+                    destinations: isLoggedIn
+                        ? [
+                            const NavigationDestination(
+                              icon: Icon(Icons.forum),
+                              label: '论坛',
                             ),
-                            label: '消息',
-                          ),
-                          const NavigationDestination(
-                            icon: Icon(Icons.person),
-                            label: '我的',
-                          ),
-                        ]
-                      : const [
-                          NavigationDestination(
-                            icon: Icon(Icons.forum),
-                            label: '论坛',
-                          ),
-                          NavigationDestination(
-                            icon: Icon(Icons.person),
-                            label: '我的',
-                          ),
-                        ],
+                            const NavigationDestination(
+                              icon: Icon(Icons.search),
+                              label: '搜索',
+                            ),
+                            NavigationDestination(
+                              icon: Badge(
+                                label: Text(unreadDisplay),
+                                isLabelVisible: unreadTotal > 0,
+                                child: const Icon(Icons.message),
+                              ),
+                              label: '消息',
+                            ),
+                            const NavigationDestination(
+                              icon: Icon(Icons.person),
+                              label: '我的',
+                            ),
+                          ]
+                        : const [
+                            NavigationDestination(
+                              icon: Icon(Icons.forum),
+                              label: '论坛',
+                            ),
+                            NavigationDestination(
+                              icon: Icon(Icons.person),
+                              label: '我的',
+                            ),
+                          ],
+                  ),
                 ),
               ),
       ),
@@ -729,7 +733,7 @@ class _ForumCategoryTile extends ConsumerWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // 分类头部：与卡身同色（不涂 page tint，避免「挖洞」）；层级靠字色/图标。
-          InkWell(
+          S1InkWell(
             onTap: hasSubs
                 ? () => ref
                     .read(settingsProvider.notifier)
@@ -738,7 +742,8 @@ class _ForumCategoryTile extends ConsumerWidget {
             child: Semantics(
               button: hasSubs,
               expanded: hasSubs ? !isCollapsed : null,
-              label: category.name,
+              // 不再传 label：可见标题与 _StatChip 的语义会合并成同一节点，
+              // 额外 label 会让读屏把分类名念两遍。
               child: ConstrainedBox(
                 constraints: const BoxConstraints(minHeight: 48),
                 child: Padding(
@@ -765,11 +770,13 @@ class _ForumCategoryTile extends ConsumerWidget {
                       _StatChip(
                         icon: Icons.article_outlined,
                         label: formatCount(category.threads),
+                        semanticsLabel: '主题 ${formatCount(category.threads)}',
                       ),
                       const SizedBox(width: 8),
                       _StatChip(
                         icon: Icons.chat_bubble_outline,
                         label: formatCount(category.posts),
+                        semanticsLabel: '帖 ${formatCount(category.posts)}',
                       ),
                       if (hasSubs) ...[
                         const SizedBox(width: 4),
@@ -808,26 +815,35 @@ class _ForumCategoryTile extends ConsumerWidget {
 }
 
 class _StatChip extends StatelessWidget {
-  const _StatChip({required this.icon, required this.label});
+  const _StatChip({
+    required this.icon,
+    required this.label,
+    required this.semanticsLabel,
+  });
   final IconData icon;
   final String label;
+  final String semanticsLabel;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: scheme.onSurfaceVariant),
-        const SizedBox(width: 2),
-        Text(
-          label,
-          style: textTheme.labelSmall?.copyWith(
-            color: scheme.onSurfaceVariant,
+    return Semantics(
+      label: semanticsLabel,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: scheme.onSurfaceVariant),
+          const SizedBox(width: 2),
+          Text(
+            label,
+            style: textTheme.labelSmall?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -917,7 +933,7 @@ class _ForumTile extends ConsumerWidget {
         ),
       ],
       builder: (context, controller, child) {
-        return InkWell(
+        return S1InkWell(
           onTap: () => context.push('/forum/${forum.fid}'),
           onLongPress: () {
             S1Haptics.selection();
@@ -927,90 +943,85 @@ class _ForumTile extends ConsumerWidget {
               controller.open();
             }
           },
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: compact ? 10 : 12,
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: compact ? 32 : 36,
-                  height: compact ? 32 : 36,
-                  decoration: BoxDecoration(
-                    color: scheme.secondaryContainer,
-                    borderRadius: S1Shape.small,
-                  ),
-                  child: Icon(
-                    Icons.forum_outlined,
-                    size: compact ? 18 : 20,
-                    color: scheme.secondary,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              forum.name,
-                              style: textTheme.bodyMedium?.copyWith(
-                                fontWeight: FontWeight.w500,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: compact ? 10 : 12,
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                forum.name,
+                                style: textTheme.bodyMedium?.copyWith(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                          if (isFavorited && !compact) ...[
-                            const SizedBox(width: 4),
-                            Icon(
-                              Icons.star,
-                              size: 14,
-                              color: scheme.tertiary,
-                            ),
+                            if (isFavorited && !compact) ...[
+                              const SizedBox(width: 4),
+                              Icon(
+                                Icons.star,
+                                size: 14,
+                                color: scheme.tertiary,
+                              ),
+                            ],
                           ],
-                        ],
-                      ),
-                      if (hasDesc) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          forum.description,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: textTheme.bodySmall
-                              ?.copyWith(color: scheme.onSurfaceVariant),
                         ),
+                        if (hasDesc) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            forum.description,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ],
                       ],
-                    ],
-                  ),
-                ),
-                if (forum.todayPosts > 0)
-                  Badge(
-                    label: CompactLabel.text(
-                      '${forum.todayPosts}',
-                      style: CompactLabel.style(
-                        context,
-                        color: scheme.onPrimary,
-                      ),
                     ),
-                    backgroundColor: scheme.primary,
-                  )
-                else if (!compact)
-                  Text(
-                    formatCount(forum.threads),
-                    style: textTheme.bodySmall
-                        ?.copyWith(color: scheme.onSurfaceVariant),
                   ),
-                const SizedBox(width: 4),
-                Icon(
-                  Icons.chevron_right,
-                  size: 18,
-                  color: scheme.onSurfaceVariant,
-                ),
-              ],
+                  Semantics(
+                    label: '今日 ${forum.todayPosts} 帖',
+                    excludeSemantics: true,
+                    child: Badge(
+                      label: CompactLabel.text(
+                        '今日 ${formatCount(forum.todayPosts)}',
+                        style: CompactLabel.style(
+                          context,
+                          color: forum.todayPosts > 0
+                              ? scheme.onSecondaryContainer
+                              : scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      backgroundColor: forum.todayPosts > 0
+                          ? scheme.secondaryContainer
+                          : scheme.surfaceContainerHighest,
+                      textColor: forum.todayPosts > 0
+                          ? scheme.onSecondaryContainer
+                          : scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 18,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ],
+              ),
             ),
           ),
         );

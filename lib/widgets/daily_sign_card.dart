@@ -11,21 +11,29 @@ class DailySignCard extends StatelessWidget {
     required this.isSubmitting,
     required this.result,
     required this.onSign,
+    this.loadingStatus = false,
   });
 
   final bool isSubmitting;
   final AttendanceResult? result;
   final VoidCallback onSign;
 
+  /// 首次进入时正在读取插件页面状态。
+  final bool loadingStatus;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final signed = result?.isSignedToday == true;
-    final failed = result?.outcome == AttendanceOutcome.failed ||
-        result?.outcome == AttendanceOutcome.unknown;
+    final unavailable = result?.outcome == AttendanceOutcome.unavailable;
+    final busy = isSubmitting || (loadingStatus && result == null);
+    final failed = !unavailable &&
+        (result?.outcome == AttendanceOutcome.failed ||
+            result?.outcome == AttendanceOutcome.unknown);
+    final mutedColor = scheme.onSurfaceVariant;
 
-    return Card(
+    final card = Card(
       elevation: 0,
       shadowColor: Colors.transparent,
       surfaceTintColor: Colors.transparent,
@@ -33,14 +41,25 @@ class DailySignCard extends StatelessWidget {
       shape: S1Shape.cardShape,
       clipBehavior: Clip.antiAlias,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(16, 14, signed ? 16 : 12, 14),
+        padding: EdgeInsets.fromLTRB(
+          16,
+          14,
+          signed || unavailable ? 16 : 12,
+          14,
+        ),
         child: Row(
           children: [
             Icon(
               signed
                   ? Icons.check_circle_outline
-                  : Icons.calendar_month_outlined,
-              color: signed ? scheme.primary : scheme.onSurfaceVariant,
+                  : unavailable
+                      ? Icons.block_outlined
+                      : Icons.calendar_month_outlined,
+              color: signed
+                  ? scheme.primary
+                  : unavailable
+                      ? mutedColor.withValues(alpha: S1Alpha.disabledIcon)
+                      : scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -50,15 +69,21 @@ class DailySignCard extends StatelessWidget {
                   Text(
                     signed ? '今日已签到' : '每日签到',
                     style: textTheme.titleSmall?.copyWith(
-                      color: scheme.onSurface,
+                      color: unavailable ? mutedColor : scheme.onSurface,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    result?.message ?? '点击完成今日 Discuz 签到',
+                    unavailable
+                        ? '论坛已暂停签到插件'
+                        : result?.message ?? (busy ? '正在读取签到状态…' : '点击完成今日签到'),
                     style: textTheme.bodySmall?.copyWith(
-                      color: failed ? scheme.error : scheme.onSurfaceVariant,
+                      color: failed
+                          ? scheme.error
+                          : unavailable
+                              ? mutedColor.withValues(alpha: S1Alpha.strong)
+                              : scheme.onSurfaceVariant,
                     ),
                   ),
                 ],
@@ -67,15 +92,15 @@ class DailySignCard extends StatelessWidget {
             const SizedBox(width: 8),
             if (signed)
               Icon(Icons.done, color: scheme.primary)
-            else
+            else if (!unavailable)
               FilledButton(
-                onPressed: isSubmitting
+                onPressed: busy
                     ? null
                     : () {
                         S1Haptics.medium();
                         onSign();
                       },
-                child: isSubmitting
+                child: busy
                     ? SizedBox(
                         width: 18,
                         height: 18,
@@ -88,6 +113,16 @@ class DailySignCard extends StatelessWidget {
               ),
           ],
         ),
+      ),
+    );
+
+    if (!unavailable) return card;
+    return Semantics(
+      enabled: false,
+      label: '每日签到不可用：论坛已暂停签到插件',
+      child: Tooltip(
+        message: '论坛已暂停签到插件，恢复后会自动可用',
+        child: card,
       ),
     );
   }

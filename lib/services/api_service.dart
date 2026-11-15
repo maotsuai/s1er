@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, compute;
+
 import '../config/api_config.dart';
 import '../models/thread.dart';
 import '../models/app_session.dart';
@@ -119,10 +121,7 @@ class ApiService {
     return null;
   }
 
-  static void _throwIfNoDataBlocked(
-    Map<String, dynamic> json,
-    bool hasData,
-  ) {
+  static void _throwIfNoDataBlocked(Map<String, dynamic> json, bool hasData) {
     if (hasData) return;
     if (isLoginRequiredResponse(json)) {
       throw LoginRequiredException();
@@ -289,9 +288,7 @@ class ApiService {
         options: Options(
           contentType: Headers.formUrlEncodedContentType,
           responseType: ResponseType.plain,
-          headers: {
-            'Referer': ApiConfig.forumAttachmentReferer(fid: fid),
-          },
+          headers: {'Referer': ApiConfig.forumAttachmentReferer(fid: fid)},
         ),
       );
       final body = DiscuzSubmitResponse.coerceBody(response.data);
@@ -351,9 +348,7 @@ class ApiService {
         latest.message != baseline.message ||
         latest.selectedTypeId != baseline.selectedTypeId ||
         latest.selectedReadPermission != baseline.selectedReadPermission) {
-      return const EditPostSubmitResult.conflict(
-        '服务器内容已发生变化，请重新载入后再编辑',
-      );
+      return const EditPostSubmitResult.conflict('服务器内容已发生变化，请重新载入后再编辑');
     }
 
     final data = <String, String>{
@@ -371,10 +366,7 @@ class ApiService {
     if (normalizedReadPerm != null && normalizedReadPerm.isNotEmpty) {
       data['readperm'] = normalizedReadPerm;
     }
-    appendAttachNewFields(
-      data,
-      collectForumAttachmentIds(data['message']),
-    );
+    appendAttachNewFields(data, collectForumAttachmentIds(data['message']));
     final submittedSubject = data['subject']!;
     final submittedMessage = data['message']!;
     try {
@@ -457,8 +449,9 @@ class ApiService {
         return false;
       }
       if (readPerm != null && readPerm.isNotEmpty) {
-        final latestReadPerm =
-            normalizeReadPermValue(latest.selectedReadPermission ?? '');
+        final latestReadPerm = normalizeReadPermValue(
+          latest.selectedReadPermission ?? '',
+        );
         if (latestReadPerm != readPerm) {
           return false;
         }
@@ -540,10 +533,7 @@ class ApiService {
       'tpp': '50',
       ...query.toForumDisplayParams(typeId: typeId),
     };
-    return buildApiUrl(
-      module: ApiConfig.moduleForumDisplay,
-      params: params,
-    );
+    return buildApiUrl(module: ApiConfig.moduleForumDisplay, params: params);
   }
 
   Future<Map<String, dynamic>> getThreadListRaw(
@@ -575,7 +565,10 @@ class ApiService {
       try {
         final pageData = await _postApp(
           'thread/page',
-          {'tid': tid, 'pageNo': '$page'},
+          {
+            'tid': tid,
+            'pageNo': '$page',
+          },
           session: session,
         );
         final thread = await _postApp('thread', {'tid': tid}, session: session);
@@ -586,6 +579,7 @@ class ApiService {
           page: page,
           uid: session.uid,
         );
+        adapted['Version'] = appApiVersion;
         // 投票表单继续由 mobile 提供，避免丢失投票权限/选项。
         if (page == 1 && thread['special']?.toString() == '1') {
           try {
@@ -613,18 +607,46 @@ class ApiService {
 
   Future<Map<String, dynamic>> _getMobileThreadDetail(
     String tid, {
-    int page = 1,
+    required int page,
     String? authorId,
   }) async {
-    final params = <String, String>{
-      'tid': tid,
-      'page': page.toString(),
-    };
+    try {
+      return await _requestThreadDetail(tid, page: page, authorId: authorId);
+    } on DioException catch (e) {
+      // 论坛升级后部分页面在 version=4 下稳定返回 Discuz System Error (503)，
+      // 同一页换成 version=1 正常。只对 503 降一级重试；超时、断网等
+      // 传输层错误不重试，避免把瞬时故障放大成重复请求。
+      if (e.response?.statusCode != 503) rethrow;
+      talker.warning(
+        'viewthread v4 returned 503, retrying with version=1 '
+        'tid=$tid page=$page',
+      );
+      return _requestThreadDetail(
+        tid,
+        page: page,
+        authorId: authorId,
+        version: legacyApiVersion,
+      );
+    }
+  }
+
+  /// v4 不可用时的降级协议版本（鹅球看帖使用同一版本，长期可用）。
+  static const String legacyApiVersion = '1';
+  static const String appApiVersion = 'app';
+
+  Future<Map<String, dynamic>> _requestThreadDetail(
+    String tid, {
+    required int page,
+    String? authorId,
+    String version = '4',
+  }) async {
+    final params = <String, String>{'tid': tid, 'page': page.toString()};
     if (authorId != null && authorId.isNotEmpty) {
       params['authorid'] = authorId;
     }
     final url = buildApiUrl(
       module: ApiConfig.moduleViewThread,
+      version: version,
       params: params,
     );
     final response = await _httpClient.get(url);
@@ -686,6 +708,26 @@ class ApiService {
   Future<int?> fetchThreadReplies(String tid) async {
     final result = await getThreadDetail(tid, page: 1);
     return DiscuzParser.parseThreadReplies(result);
+  }
+
+  /// 取本页「有评分」的楼层 pid（v4 `Variables.commentcount` 的键）。
+  ///
+  /// 正常翻页时直接复用 `viewthread` v4 响应即可；只有 v4 503 降级到 v1 时
+  /// 才需要补发这一次请求。失败（含仍 503）返回空集，评分属增强功能，
+  /// 不因此中断读帖。
+  Future<Set<String>> fetchRateMarkedPids(String tid, {int page = 1}) async {
+    try {
+      final response = await _httpClient.get(
+        buildApiUrl(
+          module: ApiConfig.moduleViewThread,
+          params: {'tid': tid, 'page': page.toString()},
+        ),
+      );
+      return DiscuzParser.parseRateMarkedPids(ensureJson(response.data));
+    } catch (e, st) {
+      talker.handle(e, st, 'fetchRateMarkedPids failed tid=$tid page=$page');
+      return const {};
+    }
   }
 
   /// API 登录：返回 null 表示成功，否则返回错误信息。
@@ -897,9 +939,7 @@ class ApiService {
       force: true,
     );
     if (!hasFormhash) {
-      return const ReplySubmitResult.rejected(
-        '无法获取表单验证串，请刷新主题页后重试',
-      );
+      return const ReplySubmitResult.rejected('无法获取表单验证串，请刷新主题页后重试');
     }
 
     final url = buildApiUrl(
@@ -907,10 +947,7 @@ class ApiService {
       params: {'replysubmit': 'yes'},
     );
 
-    final data = <String, String>{
-      'tid': tid,
-      'message': normalized,
-    };
+    final data = <String, String>{'tid': tid, 'message': normalized};
     if (quoteInfo != null) {
       data['noticeauthor'] = quoteInfo.noticeAuthor;
       data['noticetrimstr'] = quoteInfo.submitNoticeTrimStr;
@@ -932,9 +969,7 @@ class ApiService {
     } catch (e, st) {
       if (isTransportUncertainError(e)) {
         talker.handle(e, st, 'sendReply transport uncertain');
-        return const ReplySubmitResult.uncertain(
-          '回复请求状态不确定，请返回主题刷新确认后再决定是否重发',
-        );
+        return const ReplySubmitResult.uncertain('回复请求状态不确定，请返回主题刷新确认后再决定是否重发');
       }
       return ReplySubmitResult.rejected(friendlyError(e, '回复', st));
     }
@@ -950,14 +985,9 @@ class ApiService {
   }) async {
     // 附件回复与上传共用编辑页 formhash；勿 force 清掉再换 Mobile API 串。
     // 仅在缓存为空时拉取（上传预取通常已写入）。
-    final hasFormhash = await _httpClient.ensureFormhash(
-      tid: tid,
-      fid: fid,
-    );
+    final hasFormhash = await _httpClient.ensureFormhash(tid: tid, fid: fid);
     if (!hasFormhash) {
-      return const ReplySubmitResult.rejected(
-        '无法获取表单验证串，请刷新主题页后重试',
-      );
+      return const ReplySubmitResult.rejected('无法获取表单验证串，请刷新主题页后重试');
     }
 
     final data = <String, String>{
@@ -993,9 +1023,7 @@ class ApiService {
     } catch (e, st) {
       if (isTransportUncertainError(e)) {
         talker.handle(e, st, 'sendReplyViaWeb transport uncertain');
-        return const ReplySubmitResult.uncertain(
-          '回复请求状态不确定，请返回主题刷新确认后再决定是否重发',
-        );
+        return const ReplySubmitResult.uncertain('回复请求状态不确定，请返回主题刷新确认后再决定是否重发');
       }
       return ReplySubmitResult.rejected(friendlyError(e, '回复', st));
     }
@@ -1017,9 +1045,7 @@ class ApiService {
       force: true,
     );
     if (!hasFormhash) {
-      return const ReplySubmitResult.rejected(
-        '无法获取表单验证串，请刷新主题页后重试',
-      );
+      return const ReplySubmitResult.rejected('无法获取表单验证串，请刷新主题页后重试');
     }
 
     var url = '${ApiConfig.forumPostUrl}'
@@ -1057,10 +1083,7 @@ class ApiService {
   }
 
   static String _buildPollVoteBody(String tid, List<String> optionIds) {
-    final parts = <String>[
-      'tid=${Uri.encodeComponent(tid)}',
-      'pollsubmit=yes',
-    ];
+    final parts = <String>['tid=${Uri.encodeComponent(tid)}', 'pollsubmit=yes'];
     for (final id in optionIds) {
       parts.add('pollanswers%5B%5D=${Uri.encodeComponent(id)}');
     }
@@ -1445,10 +1468,7 @@ class ApiService {
   /// 从 findpost 的 Location 解析页码。
   ///
   /// S1/Discuz 对首页楼层常返回 `page=0` 或省略 `page`；二者均视为第 1 页。
-  static int? pageFromFindpostLocation(
-    String location, {
-    String? expectedTid,
-  }) {
+  static int? pageFromFindpostLocation(String location, {String? expectedTid}) {
     final redirected = Uri.parse(location);
     final pageParam = redirected.queryParameters['page'];
     final fromQuery = int.tryParse(pageParam ?? '');
@@ -1545,11 +1565,7 @@ class ApiService {
   }) async {
     final url = buildApiUrl(
       module: ApiConfig.moduleMyPm,
-      params: {
-        'subop': 'view',
-        'touid': touid,
-        'page': page.toString(),
-      },
+      params: {'subop': 'view', 'touid': touid, 'page': page.toString()},
     );
     final response = await _httpClient.get(url);
     final json = ensureJson(response.data);
@@ -1624,11 +1640,7 @@ class ApiService {
       final url = buildApiUrl(
         module: ApiConfig.moduleMyNoteList,
         version: '3',
-        params: {
-          'view': feed.name,
-          'type': 'post',
-          'page': page.toString(),
-        },
+        params: {'view': feed.name, 'type': 'post', 'page': page.toString()},
       );
       final response = await _httpClient.get(url);
       final json = ensureJson(response.data);
@@ -1742,8 +1754,9 @@ class ApiService {
         prefetchUrl,
         options: Options(responseType: ResponseType.plain),
       );
-      final prefetchFormhash =
-          FormhashExtractor.fromHtml(prefetch.data?.toString() ?? '');
+      final prefetchFormhash = FormhashExtractor.fromHtml(
+        prefetch.data?.toString() ?? '',
+      );
       if (prefetchFormhash != null) {
         _httpClient.updateFormhash(prefetchFormhash);
       }
@@ -1782,9 +1795,7 @@ class ApiService {
   }
 
   /// 取消收藏。
-  Future<FavoriteMutationResult> removeFavorite({
-    required String favid,
-  }) async {
+  Future<FavoriteMutationResult> removeFavorite({required String favid}) async {
     final url = '${ApiConfig.baseUrl}/home.php'
         '?mod=spacecp&ac=favorite&op=delete&favid=$favid'
         '&mobile=2&inajax=1&handlekey=favorite';
@@ -1918,10 +1929,7 @@ class ApiService {
     try {
       final body = await _submitDiscuzSearch(
         url: ApiConfig.searchUserUrl(),
-        fields: {
-          'srchtxt': trimmed,
-          'searchsubmit': 'yes',
-        },
+        fields: {'srchtxt': trimmed, 'searchsubmit': 'yes'},
       );
       return DiscuzParser.parseUserSearchHtml(body);
     } on _SearchRequestException catch (e) {
@@ -1958,10 +1966,7 @@ class ApiService {
     }
     final response = await _httpClient.post(
       url,
-      data: <String, dynamic>{
-        'formhash': formhash,
-        ...fields,
-      },
+      data: <String, dynamic>{'formhash': formhash, ...fields},
       options: _searchHtmlPostOptions(),
     );
     var body = await _fetchSearchHtmlBody(response);

@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -44,6 +45,7 @@ import '../utils/thread_navigation.dart';
 import '../theme/s1_haptics.dart';
 import '../theme/app_theme.dart';
 import '../widgets/thread_open_intent_scope.dart';
+import '../theme/s1_mouse_cursors.dart';
 
 class ForumListScreen extends ConsumerStatefulWidget {
   const ForumListScreen({
@@ -51,10 +53,15 @@ class ForumListScreen extends ConsumerStatefulWidget {
     required this.fid,
     this.selectedThreadId,
     this.selectedThreadIntent,
+    this.keepThreadRoute = false,
   });
   final String fid;
   final String? selectedThreadId;
   final ThreadOpenIntent? selectedThreadIntent;
+
+  /// 本页由 `/thread/:tid` 升成的双栏时保持详情路由，避免列表选帖和
+  /// 帖内翻页切到论坛路由后重建详情、重复拉取。
+  final bool keepThreadRoute;
 
   @override
   ConsumerState<ForumListScreen> createState() => _ForumListScreenState();
@@ -74,19 +81,41 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
     super.dispose();
   }
 
+  String _destinationPath(
+    ThreadDestination destination, {
+    int? resumePageHint,
+  }) {
+    if (!widget.keepThreadRoute) {
+      return ThreadRouteCodec.encodeForumPath(
+        widget.fid,
+        destination,
+        resumePageHint: resumePageHint,
+      );
+    }
+    return ThreadRouteCodec.encodeThreadPath(
+      destination,
+      resumePageHint: resumePageHint,
+      forumFid: widget.fid,
+    );
+  }
+
   void _openThread(
     ThreadDestination destination, {
     int? resumePageHint,
   }) {
-    // 同一 forum 页面改查询参数时用 go，避免叠两层同 path（pageKey 虽唯一，
-    // 也不应把双栏状态拆成两条历史）。
-    context.go(
-      ThreadRouteCodec.encodeForumPath(
-        widget.fid,
-        destination,
-        resumePageHint: resumePageHint,
-      ),
+    final location = _destinationPath(
+      destination,
+      resumePageHint: resumePageHint,
     );
+    // 同一路由内改查询参数用 go，避免叠两层同 path（pageKey 虽唯一，
+    // 也不应把双栏状态拆成两条历史）；跨路由（如由 `/thread/:tid`
+    // 直接入口升成的双栏）用 replace，保留首页等下层页面。
+    final targetPath = Uri.parse(location).path;
+    if (GoRouterState.of(context).uri.path == targetPath) {
+      context.go(location);
+    } else {
+      context.replace(location);
+    }
   }
 
   void _onScrollMetricsChanged(S1ScrollMetrics metrics) {
@@ -231,9 +260,8 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
         child: ThreadDetailScreen(
           tid: widget.selectedThreadId!,
           onClose: () => context.replace('/forum/${widget.fid}'),
-          onDestinationChanged: (destination) => context.replace(
-            ThreadRouteCodec.encodeForumPath(widget.fid, destination),
-          ),
+          onDestinationChanged: (destination) =>
+              context.replace(_destinationPath(destination)),
         ),
       );
     }
@@ -280,6 +308,11 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
                       _detailChrome.snapshot,
                     ),
                   ),
+                ),
+                IconButton(
+                  tooltip: '收起帖子，返回主题列表',
+                  icon: const Icon(Icons.close),
+                  onPressed: _closeSplitDetail,
                 ),
               ]
             : [
@@ -390,6 +423,7 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
                                   .goToPage(page),
                               pageSearchQuery: _pageSearchQuery,
                               useSplitFab: true,
+                              showRefresh: true,
                             ),
                           ),
                         ),
@@ -477,12 +511,8 @@ class _ForumListScreenState extends ConsumerState<ForumListScreen> {
                       suppressAppBar: true,
                       chromeBridge: _detailChrome,
                       onClose: _closeSplitDetail,
-                      onDestinationChanged: (destination) => context.replace(
-                        ThreadRouteCodec.encodeForumPath(
-                          widget.fid,
-                          destination,
-                        ),
-                      ),
+                      onDestinationChanged: (destination) =>
+                          context.replace(_destinationPath(destination)),
                     ),
                   ),
                 ),
@@ -571,6 +601,7 @@ class _ForumThreadList extends ConsumerWidget {
     required this.onPageChanged,
     this.pageSearchQuery = '',
     this.useSplitFab = false,
+    this.showRefresh = false,
   });
 
   final ThreadListState state;
@@ -585,6 +616,9 @@ class _ForumThreadList extends ConsumerWidget {
   final S1PageChangeCallback onPageChanged;
   final String pageSearchQuery;
   final bool useSplitFab;
+
+  /// 双栏时在左栏筛选行提供独立刷新入口，刷新列表而不影响右侧详情。
+  final bool showRefresh;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -618,6 +652,9 @@ class _ForumThreadList extends ConsumerWidget {
               ref.read(threadListProvider(fid).notifier).setQuery(query),
           onTypeSelected: (typeId) =>
               ref.read(threadListProvider(fid).notifier).selectType(typeId),
+          onRefresh: showRefresh
+              ? () => ref.read(threadListProvider(fid).notifier).refresh()
+              : null,
         ),
         Expanded(
           child: S1ContentFabOverlay(
@@ -747,6 +784,7 @@ class _ThreadFiltersSection extends ConsumerWidget {
     required this.barPadding,
     required this.onQueryChanged,
     required this.onTypeSelected,
+    this.onRefresh,
   });
 
   final ThreadListQuery query;
@@ -758,6 +796,7 @@ class _ThreadFiltersSection extends ConsumerWidget {
   final EdgeInsets barPadding;
   final ValueChanged<ThreadListQuery> onQueryChanged;
   final ValueChanged<String?> onTypeSelected;
+  final VoidCallback? onRefresh;
 
   void _toggleExpanded(WidgetRef ref, bool expanded) {
     S1Haptics.selection();
@@ -791,6 +830,7 @@ class _ThreadFiltersSection extends ConsumerWidget {
         Tooltip(
           message: tooltip,
           child: ActionChip(
+            mouseCursor: S1MouseCursors.clickable,
             avatar: Icon(icon, size: 16),
             label: Text(label),
             onPressed: onPressed,
@@ -869,7 +909,7 @@ class _ThreadFiltersSection extends ConsumerWidget {
           hint: semanticsHint,
           child: Material(
             color: Colors.transparent,
-            child: InkWell(
+            child: S1InkWell(
               onTap: enabled ? () => _toggleExpanded(ref, expanded) : null,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(minHeight: 44),
@@ -912,6 +952,20 @@ class _ThreadFiltersSection extends ConsumerWidget {
                             height: 32,
                           ),
                           onPressed: enabled ? _resetFilters : null,
+                        ),
+                      if (onRefresh != null)
+                        IconButton(
+                          tooltip: '刷新主题列表',
+                          icon: const Icon(Icons.refresh),
+                          color: scheme.onSurfaceVariant,
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 20,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints.tightFor(
+                            width: 32,
+                            height: 32,
+                          ),
+                          onPressed: enabled ? onRefresh : null,
                         ),
                       Icon(
                         expanded ? Icons.expand_less : Icons.expand_more,
@@ -1009,6 +1063,7 @@ class _ThreadSortFilterBar extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: FilterChip(
+                mouseCursor: S1MouseCursors.clickable,
                 label: Text(preset.label),
                 selected: query.preset == preset && preset.isPrimaryChip,
                 showCheckmark: false,
@@ -1036,6 +1091,7 @@ class _ThreadSortFilterBar extends StatelessWidget {
                   label: '更多筛选，当前：$_moreLabel',
                   hint: '双击打开排序和时间菜单',
                   child: FilterChip(
+                    mouseCursor: S1MouseCursors.clickable,
                     label: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1144,6 +1200,7 @@ class _ThreadTypeFilterBar extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: FilterChip(
+              mouseCursor: S1MouseCursors.clickable,
               label: const Text('全部'),
               selected: selectedTypeId == null,
               showCheckmark: false,
@@ -1159,6 +1216,7 @@ class _ThreadTypeFilterBar extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4),
               child: FilterChip(
+                mouseCursor: S1MouseCursors.clickable,
                 label: Text(entry.value),
                 selected: selectedTypeId == entry.key,
                 showCheckmark: false,

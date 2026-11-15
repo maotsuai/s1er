@@ -36,9 +36,10 @@ class _FakePostNotifier extends PostNotifier {
   int pageRequestCount = 0;
 
   @override
-  Future<void> goToPage(int page) async {
+  Future<bool> goToPage(int page) async {
     // 模拟网络失败：与真实 Notifier 一样保留当前数据。
     pageRequestCount++;
+    return false;
   }
 
   @override
@@ -223,15 +224,18 @@ void main() {
     expect(find.textContaining('再拉刷新'), findsNothing);
   });
 
-  testWidgets('failed swipe pagination keeps page and shows retry feedback',
-      (tester) async {
+  testWidgets('failed swipe pagination keeps page and shows retry feedback', (
+    tester,
+  ) async {
     final notifier = _FakePostNotifier('204', longPost: true);
     await _pumpThread(tester: tester, tid: '204', notifier: notifier);
     final pagination = find.byType(S1SwipePagination);
     await tester.drag(pagination, const Offset(0, -200));
     await tester.pumpAndSettle();
-    final list =
-        find.descendant(of: pagination, matching: find.byType(ListView));
+    final list = find.descendant(
+      of: pagination,
+      matching: find.byType(ListView),
+    );
     final position = tester
         .state<ScrollableState>(
           find.descendant(of: list, matching: find.byType(Scrollable)).first,
@@ -245,7 +249,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(notifier.pageRequestCount, 1);
-    expect(find.text('翻页失败，请重试'), findsOneWidget);
+    expect(find.text('第 2 页加载失败，请稍后重试'), findsOneWidget);
     expect(tester.widget<S1SwipePagination>(pagination).currentPage, 1);
     expect(position.pixels, before);
   });

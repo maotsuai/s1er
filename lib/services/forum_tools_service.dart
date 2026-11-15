@@ -10,6 +10,7 @@ import '../models/friend_summary.dart';
 import '../models/server_blacklist.dart';
 import '../utils/discuz_submit_response.dart';
 import '../utils/error_handler.dart';
+import 'attendance_plugin_parser.dart';
 import 'http_client.dart';
 
 /// 低频论坛工具：好友列表、每日签到、小黑屋。
@@ -56,7 +57,28 @@ class ForumToolsService {
     }
   }
 
-  /// 用户点击或授权自动签到后调用；GET 会写入服务端，失败不自动重试。
+  /// 用户在个人页展开卡片时调用：只读页面，不产生签到写入。
+  Future<AttendanceResult> fetchAttendanceStatus() async {
+    try {
+      final response = await _httpClient.get(
+        ApiConfig.dailyAttendancePageUrl(),
+        options: Options(responseType: ResponseType.plain),
+      );
+      final html = response.data?.toString() ?? '';
+      if (html.contains('id="loginform') || html.contains('name="login"')) {
+        throw LoginRequiredException();
+      }
+      return parseAttendancePage(html);
+    } catch (e, st) {
+      if (e is LoginRequiredException) rethrow;
+      return AttendanceResult(
+        outcome: AttendanceOutcome.failed,
+        message: friendlyError(e, '签到状态', st),
+      );
+    }
+  }
+
+  /// 用户点击或授权自动签到后调用；POST 会产生服务端签到写入，失败不自动重试。
   Future<AttendanceResult> dailySign() async {
     final formhash = await _httpClient.requireFormhash();
     if (formhash == null) {
@@ -66,11 +88,14 @@ class ForumToolsService {
       );
     }
 
-    final url = ApiConfig.dailyAttendanceUrl(formhash: formhash);
     try {
-      final response = await _httpClient.get(
-        url,
-        options: Options(responseType: ResponseType.plain),
+      final response = await _httpClient.post(
+        ApiConfig.dailyAttendanceCheckinUrl(),
+        data: <String, String>{'formhash': formhash, 'checkinsubmit': '1'},
+        options: Options(
+          contentType: Headers.formUrlEncodedContentType,
+          responseType: ResponseType.plain,
+        ),
       );
       return parseAttendanceResponse(response.data?.toString() ?? '');
     } catch (e, st) {
@@ -79,6 +104,34 @@ class ForumToolsService {
         message: friendlyError(e, '每日签到', st),
       );
     }
+  }
+
+  /// 解析签到插件页面（`mobile=no` 桌面模板）。
+  static AttendanceResult parseAttendancePage(String html) {
+    final page = AttendancePluginPage.parse(html);
+    if (page.unavailable) {
+      return _pluginUnavailableResult;
+    }
+    if (page.signedToday) {
+      return AttendanceResult(
+        outcome: AttendanceOutcome.alreadySigned,
+        message: _signedMessage(page),
+      );
+    }
+    return AttendanceResult(
+      outcome: AttendanceOutcome.ready,
+      message: page.consecutiveDays == null
+          ? '点击完成今日签到'
+          : '已连续签到 ${page.consecutiveDays} 天',
+    );
+  }
+
+  static String _signedMessage(AttendancePluginPage page) {
+    final used = <String>[];
+    if (page.totalDays != null) used.add('累计 ${page.totalDays} 天');
+    if (page.level != null) used.add('等级 ${page.level}');
+    final detail = used.isEmpty ? '' : '（${used.join(' · ')}）';
+    return '今日已签到$detail';
   }
 
   Future<DarkRoomPage> getDarkRoom({String? cursor}) async {
@@ -147,6 +200,7 @@ class ForumToolsService {
     return FriendListResult(items: items, count: count);
   }
 
+  /// 解析 `op=checkin` 提交后的结果页（`muanyun-053-message-box`）。
   static AttendanceResult parseAttendanceResponse(String body) {
     final html = DiscuzSubmitResponse.unwrapAjaxHtml(body);
     if (html.trim().isEmpty) {
@@ -156,6 +210,19 @@ class ForumToolsService {
       );
     }
 
+    if (isAttendancePluginUnavailable(html)) {
+      return _pluginUnavailableResult;
+    }
+
+    final outcome = AttendanceCheckinOutcome.parse(html);
+    if (outcome.signed) {
+      return AttendanceResult(
+        outcome: AttendanceOutcome.signedNow,
+        message: outcome.message,
+      );
+    }
+
+    // 兜底：旧插件 / Discuz 通用 handler 语义（`inajax=1` 响应）。
     final succeed = DiscuzSubmitResponse.extractHandlerMessage(
       html,
       handlerPrefix: 'succeedhandle_',
@@ -176,27 +243,49 @@ class ForumToolsService {
       handlerPrefix: 'errorhandle_',
       messageIndex: 0,
     );
-    if (error != null) {
+    if (error != null && error.isNotEmpty) {
       final already = error.contains('已签到');
       return AttendanceResult(
         outcome: already
             ? AttendanceOutcome.alreadySigned
             : AttendanceOutcome.failed,
-        message: error.isEmpty ? html : error,
+        message: error,
       );
     }
 
-    if (html.contains('已签到')) {
-      return AttendanceResult(
-        outcome: AttendanceOutcome.alreadySigned,
-        message: html.trim(),
+    // 提交后页面仍显示 checkin 表单 = 未成功，不动本地状态。
+    if (html.contains('checkinsubmit')) {
+      return const AttendanceResult(
+        outcome: AttendanceOutcome.failed,
+        message: '签到未生效，请稍后重试',
       );
     }
 
     return AttendanceResult(
       outcome: AttendanceOutcome.unknown,
-      message: html.trim().isEmpty ? '服务器返回异常' : html.trim(),
+      message: _attendanceFallbackMessage(html),
     );
+  }
+
+  static const AttendanceResult _pluginUnavailableResult = AttendanceResult(
+    outcome: AttendanceOutcome.unavailable,
+    message: '论坛已暂停签到插件',
+  );
+
+  /// 签到失败/未知时给用户的文案：抽取服务端提示文字，拿不到就不展示 HTML。
+  static String _attendanceFallbackMessage(String html) {
+    final text = DiscuzSubmitResponse.extractMessagetextParagraph(html)?.trim();
+    if (text != null && text.isNotEmpty && !text.contains('<')) return text;
+    return '签到失败，请稍后重试';
+  }
+
+  /// 论坛是否已停用签到插件（插件路由返回「插件不存在或已关闭」一类文案）。
+  ///
+  /// 与「今日已签到」「用户组不允许签到」区分：这是插件整体不可用，
+  /// 客户端需要收起签到入口，而不是让用户反复重试。
+  static bool isAttendancePluginUnavailable(String text) {
+    if (text.contains('插件不存在')) return true;
+    return text.contains('插件') && text.contains('已关闭');
   }
 
   static DarkRoomPage parseDarkRoomJson(
@@ -206,8 +295,8 @@ class ForumToolsService {
     if (json['error']?.toString() == 'to_login' ||
         (json['Message'] is Map &&
             (json['Message'] as Map)['messageval']?.toString().contains(
-                      'to_login',
-                    ) ==
+                  'to_login',
+                ) ==
                 true)) {
       throw LoginRequiredException();
     }
@@ -240,7 +329,8 @@ class ForumToolsService {
 
     final request = requestCursor ?? '';
     final next = nextCursor ?? '';
-    final hasMore = dataExist != '0' &&
+    final hasMore =
+        dataExist != '0' &&
         items.isNotEmpty &&
         next.isNotEmpty &&
         next != request;

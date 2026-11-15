@@ -1,3 +1,4 @@
+import './s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -14,6 +15,7 @@ import '../utils/compact_label.dart';
 import '../utils/format_utils.dart';
 import '../utils/thread_navigation.dart';
 import 'page_picker_sheet.dart';
+import '../theme/s1_mouse_cursors.dart';
 
 typedef ThreadOpenCallback = void Function(
   ThreadDestination destination, {
@@ -213,10 +215,12 @@ class ThreadCard extends ConsumerWidget {
         : isSticky
             ? scheme.onPrimaryContainer
             : scheme.onSurface;
+    // 染底卡片上的次要文字不降透明度：11px 的 labelSmall 叠加 0.7 alpha
+    // 后，暖沙浅色主题在 primaryContainer 上仅约 3.6:1，低于 4.5:1。
     final onCardSecondary = selected
-        ? scheme.onSecondaryContainer.withValues(alpha: S1Alpha.strong)
+        ? scheme.onSecondaryContainer
         : isSticky
-            ? scheme.onPrimaryContainer.withValues(alpha: S1Alpha.strong)
+            ? scheme.onPrimaryContainer
             : scheme.onSurfaceVariant;
     final metaStyle = textTheme.labelSmall?.copyWith(
       color: onCardSecondary,
@@ -226,35 +230,36 @@ class ThreadCard extends ConsumerWidget {
     final canFilterType =
         onTypeFilter != null && typeId != null && typeId.isNotEmpty;
 
-    return Semantics(
-      selected: selected,
-      button: true,
-      label: thread.subject,
-      child: Card(
-        margin: S1ReadingCardStyle.margin(
+    return Card(
+      margin: S1ReadingCardStyle.margin(
+        context,
+        enabled: compactListFullBleed,
+        vertical: tokens.cardMarginVertical,
+      ),
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      color: selected
+          ? scheme.secondaryContainer
+          : isSticky
+              ? scheme.primaryContainer
+              : S1Surface.reading(scheme),
+      shape: S1ReadingCardStyle.shape(
+        context,
+        enabled: compactListFullBleed,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: S1InkWell(
+        onTap: () => _handleTap(context, ref),
+        borderRadius: S1ReadingCardStyle.inkBorderRadius(
           context,
           enabled: compactListFullBleed,
-          vertical: tokens.cardMarginVertical,
         ),
-        elevation: 0,
-        shadowColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        color: selected
-            ? scheme.secondaryContainer
-            : isSticky
-                ? scheme.primaryContainer
-                : S1Surface.reading(scheme),
-        shape: S1ReadingCardStyle.shape(
-          context,
-          enabled: compactListFullBleed,
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => _handleTap(context, ref),
-          borderRadius: S1ReadingCardStyle.inkBorderRadius(
-            context,
-            enabled: compactListFullBleed,
-          ),
+        // 旧外层 Semantics(label: subject) 与 InkWell 自身的按钮节点重复，
+        // 读屏会把标题念两遍；这里只保留选中态，标签交给子节点合并。
+        child: Semantics(
+          selected: selected,
+          button: true,
           child: Padding(
             padding: EdgeInsets.symmetric(
               horizontal: 12,
@@ -340,14 +345,16 @@ class _ReadingProgressBar extends ConsumerWidget {
 
     return Padding(
       padding: EdgeInsets.only(top: progressTop),
-      child: ClipRRect(
-        borderRadius: S1Shape.extraSmall,
-        child: LinearProgressIndicator(
-          value: record.progressAt(liveTotalReplies),
-          minHeight: 2,
-          backgroundColor: scheme.surfaceContainerHighest,
-          valueColor: AlwaysStoppedAnimation<Color>(
-            scheme.primary.withValues(alpha: S1Alpha.strong),
+      child: ExcludeSemantics(
+        child: ClipRRect(
+          borderRadius: S1Shape.extraSmall,
+          child: LinearProgressIndicator(
+            value: record.progressAt(liveTotalReplies),
+            minHeight: 2,
+            backgroundColor: scheme.surfaceContainerHighest,
+            valueColor: AlwaysStoppedAnimation<Color>(
+              scheme.primary.withValues(alpha: S1Alpha.strong),
+            ),
           ),
         ),
       ),
@@ -402,8 +409,12 @@ class _TitleLine extends StatelessWidget {
       overflow: TextOverflow.ellipsis,
     );
 
-    final pin =
-        isSticky ? Icon(Icons.push_pin, size: 13, color: pinColor) : null;
+    final pin = isSticky
+        ? Semantics(
+            label: '置顶',
+            child: Icon(Icons.push_pin, size: 13, color: pinColor),
+          )
+        : null;
 
     final fullTagName = tagName ?? '';
     final displayTag =
@@ -559,6 +570,7 @@ class _MetaLine extends StatelessWidget {
                   value: views,
                   color: secondaryColor,
                   textStyle: metaStyle,
+                  semanticLabel: '浏览 $views',
                 ),
                 const SizedBox(width: 8),
                 _ReplyMetaStat(
@@ -609,11 +621,12 @@ class _PageCountButton extends StatelessWidget {
     const shape = S1Shape.chipShape;
     return Semantics(
       button: true,
-      label: label,
+      label: '$label，选择页码',
+      excludeSemantics: true,
       child: Material(
         color: Colors.transparent,
         shape: shape,
-        child: InkWell(
+        child: S1InkWell(
           onTap: onPressed,
           customBorder: shape,
           child: Container(
@@ -665,33 +678,44 @@ class _ReplyMetaStat extends ConsumerWidget {
     final progress = record?.progressAt(liveTotalReplies) ?? 0;
     final isFinished = record != null && record.isFinishedAt(liveTotalReplies);
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Transform.translate(
-          offset: const Offset(0, 0.5),
-          child: Icon(Icons.chat_bubble_outline, size: 12, color: color),
+    final readingState = record == null || progress <= 0
+        ? ''
+        : isFinished
+            ? '，已读'
+            : '，读到第 ${record.lastReadFloor} 楼';
+
+    return Semantics(
+      label: '回复 $base$readingState',
+      child: ExcludeSemantics(
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Transform.translate(
+              offset: const Offset(0, 0.5),
+              child: Icon(Icons.chat_bubble_outline, size: 12, color: color),
+            ),
+            const SizedBox(width: 2),
+            CompactLabel.text(
+              base,
+              style: CompactLabel.style(
+                context,
+                base: textStyle,
+                color: color,
+              ),
+            ),
+            if (record != null && progress > 0) ...[
+              const SizedBox(width: 4),
+              _ReadingStateBadge(
+                isFinished: isFinished,
+                lastReadFloor: record.lastReadFloor,
+                textStyle: textStyle,
+                scheme: scheme,
+              ),
+            ],
+          ],
         ),
-        const SizedBox(width: 2),
-        CompactLabel.text(
-          base,
-          style: CompactLabel.style(
-            context,
-            base: textStyle,
-            color: color,
-          ),
-        ),
-        if (record != null && progress > 0) ...[
-          const SizedBox(width: 4),
-          _ReadingStateBadge(
-            isFinished: isFinished,
-            lastReadFloor: record.lastReadFloor,
-            textStyle: textStyle,
-            scheme: scheme,
-          ),
-        ],
-      ],
+      ),
     );
   }
 }
@@ -750,30 +774,36 @@ class _MetaStat extends StatelessWidget {
     required this.value,
     required this.color,
     required this.textStyle,
+    required this.semanticLabel,
   });
 
   final IconData icon;
   final String value;
   final Color color;
   final TextStyle? textStyle;
+  final String semanticLabel;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Icon(icon, size: 12, color: color),
-        const SizedBox(width: 2),
-        CompactLabel.text(
-          value,
-          style: CompactLabel.style(
-            context,
-            base: textStyle,
-            color: color,
+    return Semantics(
+      label: semanticLabel,
+      excludeSemantics: true,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 2),
+          CompactLabel.text(
+            value,
+            style: CompactLabel.style(
+              context,
+              base: textStyle,
+              color: color,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
@@ -829,6 +859,7 @@ class _CategoryTag extends StatelessWidget {
                   : scheme.surfaceContainerHighest;
 
       final chip = FilterChip(
+        mouseCursor: S1MouseCursors.clickable,
         label: CompactLabel.text(label, style: labelStyle),
         selected: selected,
         showCheckmark: false,
@@ -852,27 +883,44 @@ class _CategoryTag extends StatelessWidget {
           }
         },
       );
+      // FilterChip 默认把截断后的短标签当作 checkbox 朗读；这里换成完整分类名，
+      // 并说明点按行为（筛选 / 取消筛选）。
+      final labeledChip = Semantics(
+        button: true,
+        selected: selected,
+        label: selected ? '分类 $fullLabel，已筛选' : '分类 $fullLabel，筛选',
+        excludeSemantics: true,
+        child: chip,
+      );
       if (fullLabel != label) {
-        return Tooltip(message: fullLabel, child: chip);
+        return Tooltip(
+          message: fullLabel,
+          excludeFromSemantics: true,
+          child: labeledChip,
+        );
       }
-      return chip;
+      return labeledChip;
     }
 
-    return Chip(
-      label: CompactLabel.text(
-        label,
-        style: CompactLabel.style(
-          context,
-          color: scheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
+    return Semantics(
+      label: '分类 $fullLabel',
+      excludeSemantics: true,
+      child: Chip(
+        label: CompactLabel.text(
+          label,
+          style: CompactLabel.style(
+            context,
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w600,
+          ),
         ),
+        backgroundColor: scheme.surfaceContainerHighest,
+        side: BorderSide.none,
+        labelPadding: chipLabelPadding,
+        visualDensity: chipVisualDensity,
+        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        padding: EdgeInsets.zero,
       ),
-      backgroundColor: scheme.surfaceContainerHighest,
-      side: BorderSide.none,
-      labelPadding: chipLabelPadding,
-      visualDensity: chipVisualDensity,
-      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      padding: EdgeInsets.zero,
     );
   }
 }

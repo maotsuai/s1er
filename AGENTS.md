@@ -39,6 +39,8 @@
 | 网络状态 | connectivity_plus | ^6.1.4 |
 | 设备机型标签 | device_info_plus（小尾巴细机型；失败回退平台名） | ^13.2.0 |
 | 桌面窗口管理 | window_manager（自绘标题栏；仅 Windows / macOS / Linux） | ^0.5.1 |
+| 系统托盘 | tray_manager（托盘图标 / 菜单；仅 Windows / macOS / Linux） | 0.8.3 |
+| 桌面图标 / 快捷方式 | win32 + ffi（窗口图标 WM_SETICON；桌面 `.lnk` 创建与归属校验；仅 Windows） | ^6.3.0 / ^2.2.0 |
 | 备份（L1 ZIP） | archive / file_selector / share_plus | ^4.0.9 / ^1.1.0 / ^13.2.0 |
 | 回复插图 | file_selector + pasteboard；默认 Discuz 论坛附件（swfupload → `[attachimg]`）；备选 `p.sda1.dev` 外链 | 有 `[attachimg]` 时网页提交带 `attachnew`；否则 Mobile `sendreply`/`newthread` |
 | 麻将脸表情 | `assets/emoticons/` + packs/list/ATTRIBUTION | 自 s1emoticon Release；无 LICENSE 已声明 |
@@ -76,7 +78,7 @@
 - **排版常量**：`S1Typography.defaultBodySize` 为字号设置标准档，HTML 渲染通过 `S1Typography.bodySize(textTheme)` 桥接
 - **Modal sheet 关闭**：标准高度抽屉 / `showS1AdaptiveSheet` **不放**顶栏关闭按钮；靠 drag handle（紧凑屏已由 API 提供）、点 scrim、系统返回 / Escape。禁止内容区再画一套自定义 drag handle。例外：`AlertDialog` 的取消/关闭 **actions**；全屏 modal 的顶栏关闭；内容错误/空态且无其它主操作时的内容区 CTA（如「关闭」）
 
-**审计**：`dart run scripts/audit_m3.dart --fail-on-error`（CI / 本地均需通过；含 M3、系统底栏占位与导航栏图标亮度合规）
+**审计**：`dart scripts/audit_m3.dart --fail-on-error`（M3、系统底栏占位与导航栏图标亮度）与 `dart scripts/audit_cursors.dart --fail-on-error`（可点控件须走 `S1InkWell` 或显式 `mouseCursor`，见 [ADR 0010](docs/adr/0010-desktop-mouse-cursor-policy.md)）；CI / 本地均需通过
 
 ---
 
@@ -253,6 +255,12 @@ flutter run -d chrome --dart-define=TALKER_LOG_LEVEL=all --dart-define=TALKER_MA
 - 分享卡导出（方案 C）：Native `ironpress`（mozjpeg / oxipng / libwebp 预编译）；默认 WebP，可选 JPEG / PNG。Web：`canvas.toBlob`（webp/jpeg）或引擎 Skia PNG。原定 `imagekit_ffi`（方案 B）因 `hooks` 与 `drift`/`sqlite3` 冲突未采用。
 - ironpress 暂用 **git fork**（`Shirolin/ironpress@63a6e85`，pubspec 锁定 commit）：上游 0.2.0 的 iOS xcframework 中 sim slice 静态库名为 `libironpress-sim.a`，与 device slice 不一致，CocoaPods 1.16+ `validate_xcframeworks` 以「differing binary names」拒绝 `pod install`（iOS 首建 CI 暴露）。fork 已将 sim slice 重命名对齐；**上游合并修复后切回 pub 版本约束**（同步改 AGENTS 锁定表、README 技术栈表）。
 - 启动器图标：黑/白 = solid-plate + **16%** 前景 inset；成品主题图（如 xb2，`androidMasterAsIcon`）= **同一 16% 前景 + 同图 full-bleed 背景**。禁止 mipmap-only、禁止成品图 0% 单层、禁止成品图再套纯色底板。细则：`docs/app-icons.md`；改完跑 `dart run scripts/sync_app_icons.dart`。
+- 系统托盘（`tray_manager` 0.8.x）：经 `nativeapi` 以 build hook 打包 C++ 库，Android/iOS 也会带上 `libcnativeapi`（debug 约 2.3 MB/ABI），需本机/CI 有 NDK；Web 由 `lib/utils/desktop_tray.dart` 条件导入到 stub，禁止直接 `import 'package:tray_manager/...'`（其 `nativeapi_flutter` 依赖 `dart:io`，会破坏 Web 构建）。托盘右键菜单须显式 `setContextMenuTrigger(ContextMenuTrigger.rightClicked)`，原生 API 默认不自动弹出。托盘图标须从 `rootBundle` 读字节经 `Image.fromBase64` 传入，**禁用 `ImageAsset.fromAsset`**：后者把 `data/flutter_assets/...png` 的磁盘路径交给 GDI+，句柄会保留到图像销毁，导致 Windows 覆盖更新改名失败并整体回滚。
+
+- Windows 单实例（`lib/utils/single_instance.dart`）：命名互斥量 `Local\S1er.SingleInstance`，第二实例用 `FindWindowW(null, 'S1er')` 激活已有窗口后退出。**覆盖更新拉起的进程必须跳过重复检查但仍持有互斥量**（`ensurePrimary(updateHandoff: true)`），否则旧进程还活着等 marker 时新进程会自己退出，更新必然失败。改名/改窗口标题时须同步 `_windowTitle` 与 `docs`。
+  - **不要用 `GetLastError()` 判断 `CreateMutexW` 是否已存在**：Flutter release 中该值恒为 0（普通 Dart AOT 正常），曾导致第二实例照常启动。现改为 `OpenMutexW` 探测存在 → `CreateMutexW(bInitialOwner: 1)` → `WaitForSingleObject(0)` 校验所有权；互斥量句柄须保持打开至进程结束。
+- 覆盖更新成功后会留下 `*.s1erold` 与 `.s1er-staging*`；旧进程退出前无法删除，由新进程启动时 `WindowsPortableUpdater.cleanupAfterUpdate()` 回收。`_performSwap` 失败时错误文案须带出被占用的文件名。
+- Windows 桌面图标（`lib/services/desktop_icon_service*.dart`）：`s1er.exe` 的 PE 嵌入图标无法运行时修改；可选主题作用于**窗口/任务栏图标、自绘标题栏图标、托盘图标**与**本应用创建的桌面快捷方式**。`window_manager.setIcon` 仅接受 `.ico` 且会拼 `data/flutter_assets/` 前缀，故改为 `LoadImageW` + `WM_SETICON` 直接应用生成的 ICO；枚举窗口时须按**标题精确匹配** `S1er`（同进程 `GDI+ Window (s1er.exe)` 也非空，长度判断会误中）。托盘经 `DesktopTrayController.setIconAsset` 跟随主题，启动时由 `initialize(iconAsset:)` 一次性传入。桌面 `S1er.lnk` 只在归属本 exe 时覆盖/删除，同名他源快捷方式保持不动；任务栏已固定图标需取消固定后重新固定。Web/macOS/Linux 由 `desktop_icon_service_web.dart`（Web）/`isSupported=false`（其他桌面）短路。
 - iOS 侧滑返回：`/forum/:fid` 与 `/thread/:tid` 使用 `NoTransitionPage`，绕开 `CupertinoPageTransitionsBuilder`，**iOS 边缘侧滑返回在这两个页面不生效**。帖子页使用方向锁定的智能跟手翻页，但恢复路由侧滑仍需独立评估，不随翻页重构自动开启。
 - iOS 构建/性能排查：见 `docs/development.md` 的「iOS 构建与运行」；`flutter run` 默认 debug 包滚动卡顿属预期，体验与回帖排查一律用 `--release` / `--profile`。
 
@@ -304,8 +312,9 @@ flutter run -d chrome --dart-define=TALKER_LOG_LEVEL=all --dart-define=TALKER_MA
 
 - **Flutter SDK**：预装在 `/home/ubuntu/flutter`（stable，Dart 3.12+），已通过 `~/.bashrc` 加入交互式 shell 的 PATH。非交互式脚本请用全路径 `/home/ubuntu/flutter/bin/flutter`。
 - **Lint / Test**：`flutter analyze`（当前 0 issue）与 `flutter test`（250+ 测试）。注意：**首次** `flutter test` 会一次性编译引擎测试产物，可能数分钟无输出（输出被 shell 缓冲），属正常；产物缓存后整套测试约数秒到十几秒。用 `--reporter expanded` 可看到实时进度。
-- **Pre-commit**：安装 `.\scripts\install_precommit.ps1` 后，默认 `S1_PRECOMMIT=full`（format + analyze + test + M3）。小改用 `S1_PRECOMMIT=lite`；完全跳过用 `skip` 或 `git commit --no-verify`（**仅当用户明确要求跳过时**）。源脚本：`scripts/pre-commit-hook.sh`；用法见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-- **M3 审计**：`dart run scripts/audit_m3.dart --fail-on-error` 扫描 `lib/`（P0/P1）、`lib/screens/` 系统底栏合规与 `test/`，报告输出至 `reports/m3_audit_<date>.md`。
+- **Pre-commit**：安装 `.\scripts\install_precommit.ps1` 后，默认 `S1_PRECOMMIT=full`（format + analyze + test + M3 + cursor）。小改用 `S1_PRECOMMIT=lite`；完全跳过用 `skip` 或 `git commit --no-verify`（**仅当用户明确要求跳过时**）。源脚本：`scripts/pre-commit-hook.sh`；用法见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **M3 审计**：`dart scripts/audit_m3.dart --fail-on-error` 扫描 `lib/`（P0/P1）、`lib/screens/` 系统底栏合规与 `test/`，报告输出至 `reports/m3_audit_<date>.md`。
+- **指针策略审计**：`dart scripts/audit_cursors.dart --fail-on-error` 扫描 `lib/`，可交互的裸 `InkWell` 且无显式 `mouseCursor` 即失败；规则与理由见 [ADR 0010](docs/adr/0010-desktop-mouse-cursor-policy.md)。
 - **运行 Web 开发环境（推荐的可测试目标）**：需要同时启动两个进程（标准命令见 [docs/development.md](docs/development.md)）：
   1. CORS 代理：`dart run scripts/proxy_server.dart`，监听 `http://localhost:19080`，转发到 `https://stage1st.com/2b/...` 并处理 CORS/Cookie。
   2. Flutter Web：`flutter run -d web-server --web-port 8080 --web-hostname 0.0.0.0`（无头 VM 用 `web-server` 设备，避免依赖 Chrome 调试扩展；桌面 Chrome 可直接访问 `http://localhost:8080`）。

@@ -1,8 +1,11 @@
+import '../widgets/s1_ink_well.dart';
+
 import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../config/api_config.dart';
 import '../config/constants.dart';
 import '../models/blacklist_record.dart';
@@ -18,6 +21,7 @@ import '../providers/reading_history_provider.dart';
 import '../providers/settings_provider.dart';
 import '../providers/webdav_sync_provider.dart';
 import '../providers/thread_open_intent_provider.dart';
+import '../providers/thread_rate_logs_provider.dart';
 import '../utils/compose_img_tags.dart';
 import '../utils/quote_snapshot_store.dart';
 import '../widgets/app_bar_more_menu.dart';
@@ -329,10 +333,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
           perPage: state.perPage,
           isNewVisit: !_progress.hasRecordedInitialVisit,
         );
-    _progress.markRecorded(
-      page: state.currentPage,
-      floorInPage: resolvedFloor,
-    );
+    _progress.markRecorded(page: state.currentPage, floorInPage: resolvedFloor);
     final record =
         ref.read(readingHistoryServiceProvider).getRecord(widget.tid);
     if (record != null) {
@@ -621,16 +622,29 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
   /// 单击「下一楼」：滚至下一楼靠上展示；已是末楼则滚到页底。
   void _scrollToNextFloor() {
     unawaited(
-      _runScrollAction(
-        () async {
-          await ScrollFloorNavigator.scrollToNextFloor(
-            postKeys: _postKeys,
-            onAtLastFloor: () => unawaited(_scrollToBottomImpl()),
-          );
-          await _flushProgressAfterProgrammaticScroll();
-        },
-      ),
+      _runScrollAction(() async {
+        await ScrollFloorNavigator.scrollToNextFloor(
+          postKeys: _postKeys,
+          onAtLastFloor: () => unawaited(_scrollToBottomImpl()),
+        );
+        await _flushProgressAfterProgrammaticScroll();
+      }),
     );
+  }
+
+  /// 翻页失败时明确告知用户：页码与路由都停在原页，避免误以为翻页没生效。
+  ///
+  /// 三槽 PageView 失败后必须复位回中心槽，否则滑动路径会把用户留在「新页
+  /// 空白槽位 + 旧页内容」的状态，正是 #52 的反面。
+  void _handlePageLoadFailed(int page) {
+    if (!mounted) return;
+    setState(() {
+      _manualPageChange = true;
+      _openScrollConsumed = true;
+      _pendingInitialNavigation = false;
+    });
+    _swipeKey.currentState?.syncAfterExternalPageChange();
+    S1SnackBar.show(context, message: '第 $page 页加载失败，请稍后重试');
   }
 
   Future<void> _goToPage(int page, {bool scrollToBottom = false}) async {
@@ -672,22 +686,21 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
                 absoluteFloor: (page - 1) * ppp + rememberedFloor,
               );
       if (!ok) {
-        if (!mounted) return;
-        setState(() {
-          _manualPageChange = true;
-          _openScrollConsumed = true;
-          _pendingInitialNavigation = false;
-        });
-        S1SnackBar.show(context, message: '翻页失败，请重试');
+        _handlePageLoadFailed(page);
         return;
       }
     } else {
-      await ref.read(postProvider(widget.tid).notifier).goToPage(page);
+      final ok =
+          await ref.read(postProvider(widget.tid).notifier).goToPage(page);
+      if (!ok) {
+        _handlePageLoadFailed(page);
+        return;
+      }
     }
     if (!mounted) return;
     // Notifier 在超时/API 错误时保留旧数据；不能据此改路由或重置阅读位置。
     if (ref.read(postProvider(widget.tid)).asData?.value.currentPage != page) {
-      S1SnackBar.show(context, message: '翻页失败，请重试');
+      _handlePageLoadFailed(page);
       return;
     }
     _swipeKey.currentState?.syncAfterExternalPageChange();
@@ -758,8 +771,10 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       switch (outcome) {
         case ThreadEndRefreshOutcome.jumpedToNewLastPage:
           if (after.posts.length > before.posts.length) {
-            final firstNewIndex =
-                before.posts.length.clamp(0, after.posts.length - 1);
+            final firstNewIndex = before.posts.length.clamp(
+              0,
+              after.posts.length - 1,
+            );
             _scheduleEnsurePostKeys(after.posts.length);
             await WidgetsBinding.instance.endOfFrame;
             if (!mounted) return;
@@ -773,8 +788,10 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
             await _goToPage(nextPage);
           }
         case ThreadEndRefreshOutcome.scrolledToNewPosts:
-          final firstNewIndex =
-              before.posts.length.clamp(0, after.posts.length - 1);
+          final firstNewIndex = before.posts.length.clamp(
+            0,
+            after.posts.length - 1,
+          );
           _scheduleEnsurePostKeys(after.posts.length);
           await WidgetsBinding.instance.endOfFrame;
           if (!mounted) return;
@@ -806,18 +823,11 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
         : '帖子 ${widget.tid}';
     final replies =
         ref.read(postProvider(widget.tid)).asData?.value.totalReplies;
-    final ok = notifier.pin(
-      tid: widget.tid,
-      title: title,
-      replies: replies,
-    );
+    final ok = notifier.pin(tid: widget.tid, title: title, replies: replies);
     if (ok) {
       S1SnackBar.show(context, message: '已钉在首页');
     } else {
-      S1SnackBar.show(
-        context,
-        message: '首页置顶已满（10 条），请先移除一条',
-      );
+      S1SnackBar.show(context, message: '首页置顶已满（10 条），请先移除一条');
     }
   }
 
@@ -925,9 +935,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
     );
     final threadSubject = state.threadSubject?.trim();
     if (threadSubject != null && threadSubject.isNotEmpty) {
-      editQuery.write(
-        '&subject=${Uri.encodeQueryComponent(threadSubject)}',
-      );
+      editQuery.write('&subject=${Uri.encodeQueryComponent(threadSubject)}');
     }
     final result = await context.push<EditPostSubmitResult>(
       editQuery.toString(),
@@ -951,12 +959,22 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       await context.push('/login');
       return;
     }
-    await showRateDialog(
-      context,
-      ref,
-      tid: widget.tid,
-      pid: post.pid,
-    );
+    await showRateDialog(context, ref, tid: widget.tid, pid: post.pid);
+  }
+
+  Future<void> _openRateLog(Post post) async {
+    final notifier = ref.read(threadRateLogsProvider(widget.tid).notifier);
+    final key = (widget.tid, post.pid);
+    final ok = await notifier.ensureRateLog(post.pid);
+    if (!mounted) return;
+    if (!ok) {
+      S1SnackBar.error(context, message: '加载评分失败，请稍后重试');
+      return;
+    }
+    final log = ref.read(rateLogProvider(key));
+    if (log == null || log.isEmpty) {
+      S1SnackBar.show(context, message: '该楼暂无评分记录');
+    }
   }
 
   Future<void> _openReportDialog(Post post, PostListState state) async {
@@ -1037,26 +1055,23 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       isHighlighted: highlightPid != null && post.pid == highlightPid,
       isExpandedBlocked: _expandedBlockedPids.contains(post.pid),
       shareSelectMode: _shareSelectMode,
-      isShareSelected:
-          ShareFloorSelection.containsPid(_shareSelectedFloors, post.pid),
+      isShareSelected: ShareFloorSelection.containsPid(
+        _shareSelectedFloors,
+        post.pid,
+      ),
       highlightQuery: pageQuery.isEmpty ? null : pageQuery,
       onExpandBlocked: () {
         setState(() => _expandedBlockedPids.add(post.pid));
       },
       onFilterByAuthor: () {
         _progress.clearPageFloorMemory();
-        ref.read(postProvider(widget.tid).notifier).filterByAuthor(
-              post.authorId,
-              post.author,
-            );
+        ref
+            .read(postProvider(widget.tid).notifier)
+            .filterByAuthor(post.authorId, post.author);
         _scrollToTop();
       },
       onReply: state.allowReply
-          ? () => _openCompose(
-                state,
-                replyTo: post,
-                displayFloor: displayFloor,
-              )
+          ? () => _openCompose(state, replyTo: post, displayFloor: displayFloor)
           : null,
       onShare: () => ref.read(postShareProvider.notifier).share(
             context: context,
@@ -1070,6 +1085,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       onShareSelectToggle: () => _toggleShareFloor(post, displayFloor),
       onEdit: () => _openEdit(state, post),
       onRate: () => _openRateDialog(post),
+      onViewRates: () => _openRateLog(post),
       onAddToBlacklist: () => _confirmAddToBlacklist(post),
       onReport: () => _openReportDialog(post, state),
     );
@@ -1131,10 +1147,8 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
           });
         },
         onGoToLatest: () => unawaited(_goToLatest()),
-        onTogglePin: () => _toggleThreadPin(
-          context,
-          subject: state?.threadSubject,
-        ),
+        onTogglePin: () =>
+            _toggleThreadPin(context, subject: state?.threadSubject),
         onPostListDensityChanged: (density) =>
             ref.read(settingsProvider.notifier).setPostListDensity(density),
         onPrevPage: currentPage > 1
@@ -1153,16 +1167,11 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
     if (widget.embedded) {
       return S1ReadingColumn(showPaneGutter: true, child: child);
     }
-    return S1ContentWidth(
-      mode: S1ContentWidthMode.reading,
-      child: child,
-    );
+    return S1ContentWidth(mode: S1ContentWidthMode.reading, child: child);
   }
 
   Widget _buildLoadingBody() {
-    return const S1AsyncListLoading(
-      child: PostItemSkeletonList(),
-    );
+    return const S1AsyncListLoading(child: PostItemSkeletonList());
   }
 
   Widget _buildPostPageList(
@@ -1198,12 +1207,8 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       scrollCacheExtent: S1FabLayout.threadDetailScrollCacheExtent,
       padding: S1FabLayout.threadDetailScrollBottomPadding,
       itemCount: _detailItemCount(state, visible),
-      itemBuilder: (context, index) => _buildDetailItem(
-        context,
-        state,
-        visible,
-        index,
-      ),
+      itemBuilder: (context, index) =>
+          _buildDetailItem(context, state, visible, index),
     );
   }
 
@@ -1240,11 +1245,9 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
     });
     _resetOpenScrollConsumption();
     try {
-      final ok =
-          await ref.read(postProvider(widget.tid).notifier).restoreToFloor(
-                page: snap.page,
-                absoluteFloor: snap.absoluteFloor,
-              );
+      final ok = await ref
+          .read(postProvider(widget.tid).notifier)
+          .restoreToFloor(page: snap.page, absoluteFloor: snap.absoluteFloor);
       if (!ok || !mounted) return;
       stack.pop();
       _swipeKey.currentState?.syncAfterExternalPageChange();
@@ -1308,8 +1311,10 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
       threadOpenIntentProvider(widget.tid),
       _onOpenIntentChanged,
     );
-    ref.listen<AsyncValue<PostListState>>(postProvider(widget.tid),
-        (previous, next) {
+    ref.listen<AsyncValue<PostListState>>(postProvider(widget.tid), (
+      previous,
+      next,
+    ) {
       next.whenData((state) {
         _maybeShowLocateError(state);
         if (!_openScrollConsumed && state.openScrollTarget != null) {
@@ -1527,25 +1532,24 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
                         onScrollEnd: _onScrollEndRecordProgress,
                         child: Scrollbar(
                           controller: scrollController,
-                          child: _shareSelectMode
-                              ? list
-                              : RefreshIndicator(
-                                  onRefresh: () => S1Haptics.wrapRefresh(
-                                    () => ref
-                                        .read(postProvider(widget.tid).notifier)
-                                        .refresh(),
-                                  ),
-                                  child: list,
-                                ),
+                          // 保留 Scrollable，避免进入多选时重置滚动位置。
+                          child: RefreshIndicator(
+                            notificationPredicate: (notification) =>
+                                !_shareSelectMode && notification.depth == 0,
+                            onRefresh: () => S1Haptics.wrapRefresh(
+                              () => ref
+                                  .read(postProvider(widget.tid).notifier)
+                                  .refresh(),
+                            ),
+                            child: list,
+                          ),
                         ),
                       );
                     },
                   ),
                 ),
                 if (showLocateOverlay)
-                  const Positioned.fill(
-                    child: ThreadLocateSkeleton(),
-                  ),
+                  const Positioned.fill(child: ThreadLocateSkeleton()),
               ],
             ),
           );
@@ -1609,10 +1613,7 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
                   ),
                 ),
               if (postsAsync.isLoading)
-                const SizedBox(
-                  height: 2,
-                  child: LinearProgressIndicator(),
-                ),
+                const SizedBox(height: 2, child: LinearProgressIndicator()),
               if (state.isFiltering)
                 Container(
                   width: double.infinity,
@@ -1653,10 +1654,10 @@ class _ThreadDetailScreenState extends ConsumerState<ThreadDetailScreen> {
                         ),
                         label: Text(
                           '取消',
-                          style:
-                              Theme.of(context).textTheme.labelLarge?.copyWith(
-                                    color: scheme.onPrimaryContainer,
-                                  ),
+                          style: Theme.of(context)
+                              .textTheme
+                              .labelLarge
+                              ?.copyWith(color: scheme.onPrimaryContainer),
                         ),
                       ),
                     ],
@@ -1738,6 +1739,7 @@ class _ThreadDetailPostTile extends ConsumerWidget {
     required this.onShareSelectToggle,
     required this.onEdit,
     required this.onRate,
+    required this.onViewRates,
     required this.onAddToBlacklist,
     required this.onReport,
     this.highlightQuery,
@@ -1760,6 +1762,7 @@ class _ThreadDetailPostTile extends ConsumerWidget {
   final VoidCallback onShareSelectToggle;
   final VoidCallback onEdit;
   final VoidCallback onRate;
+  final VoidCallback onViewRates;
   final VoidCallback onAddToBlacklist;
   final VoidCallback onReport;
   final String? highlightQuery;
@@ -1826,6 +1829,7 @@ class _ThreadDetailPostTile extends ConsumerWidget {
         onShareSelectToggle: onShareSelectToggle,
         onEdit: canEdit ? onEdit : null,
         onRate: canRate ? onRate : null,
+        onViewRates: onViewRates,
         onAddToBlacklist: canAddToBlacklist ? onAddToBlacklist : null,
         onReport: isLoggedIn ? onReport : null,
       ),
@@ -1835,10 +1839,7 @@ class _ThreadDetailPostTile extends ConsumerWidget {
 
 /// 被屏蔽楼层的可展开占位行（保留列表键位）。
 class _BlockedPostPlaceholder extends ConsumerWidget {
-  const _BlockedPostPlaceholder({
-    required this.author,
-    required this.onExpand,
-  });
+  const _BlockedPostPlaceholder({required this.author, required this.onExpand});
 
   final String author;
   final VoidCallback onExpand;
@@ -1863,11 +1864,8 @@ class _BlockedPostPlaceholder extends ConsumerWidget {
       ),
       elevation: 0,
       color: S1Surface.reading(scheme),
-      shape: S1ReadingCardStyle.shape(
-        context,
-        enabled: compactListFullBleed,
-      ),
-      child: InkWell(
+      shape: S1ReadingCardStyle.shape(context, enabled: compactListFullBleed),
+      child: S1InkWell(
         onTap: onExpand,
         borderRadius: S1ReadingCardStyle.inkBorderRadius(
           context,

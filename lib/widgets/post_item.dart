@@ -1,3 +1,6 @@
+import './s1_ink_well.dart';
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -119,6 +122,7 @@ class PostItem extends ConsumerStatefulWidget {
     this.onReply,
     this.onEdit,
     this.onRate,
+    this.onViewRates,
     this.onAddToBlacklist,
     this.onReport,
     this.onShare,
@@ -140,6 +144,7 @@ class PostItem extends ConsumerStatefulWidget {
   final VoidCallback? onReply;
   final VoidCallback? onEdit;
   final VoidCallback? onRate;
+  final VoidCallback? onViewRates;
   final VoidCallback? onAddToBlacklist;
   final VoidCallback? onReport;
   final VoidCallback? onShare;
@@ -284,6 +289,7 @@ class _PostItemState extends ConsumerState<PostItem>
               BbcodeRenderer(
                 bbcode: widget.post.message,
                 imageIndexCounter: _imageIndexCounter,
+                attachments: widget.post.attachments,
                 currentTid: widget.tid,
                 imagesExpanded: _imagesExpanded,
                 onExpandImages: _expandImages,
@@ -443,7 +449,7 @@ class _PostItemState extends ConsumerState<PostItem>
                           ),
                         ),
                         const SizedBox(width: 8),
-                        InkWell(
+                        S1InkWell(
                           onTap: () =>
                               setState(() => _recoveredQuoteExpanded = false),
                           child: Text(
@@ -617,6 +623,7 @@ class _PostItemState extends ConsumerState<PostItem>
       stripStylesEnabled: effectiveStrip,
       onEdit: widget.onEdit,
       onRate: widget.onRate,
+      onViewRates: widget.onViewRates,
       onAddToBlacklist: widget.onAddToBlacklist,
       onReport: widget.onReport,
       iconButtonConstraints: tokens.headerActionConstraints,
@@ -625,8 +632,12 @@ class _PostItemState extends ConsumerState<PostItem>
     );
 
     final avatar = Semantics(
+      // container: 不加时该按钮配置会并入楼层所在的语义节点，
+      // 读屏把整层正文都念成「查看 … 的资料」按钮的一部分。
+      container: true,
       button: true,
       label: '查看 ${widget.post.author} 的资料',
+      excludeSemantics: true,
       child: S1ClickRegion(
         onTap: () => _showUserInfo(context, ref),
         child: WebAvatar(
@@ -730,19 +741,58 @@ class _PostItemState extends ConsumerState<PostItem>
   }
 }
 
-class _PostRateLogSection extends ConsumerWidget {
+class _PostRateLogSection extends ConsumerStatefulWidget {
   const _PostRateLogSection({required this.tid, required this.pid});
 
   final String tid;
   final String pid;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final rateLog = ref.watch(rateLogProvider((tid, pid)));
+  ConsumerState<_PostRateLogSection> createState() =>
+      _PostRateLogSectionState();
+}
+
+class _PostRateLogSectionState extends ConsumerState<_PostRateLogSection> {
+  Timer? _fetchDebounce;
+  Timer? _retryTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // 只为本页标记过、且真正被构建（接近可见）的楼层拉取评分。
+    // 300ms 防抖：快速划过/连续翻页的楼层不发请求，避免把 1 KB 小请求
+    // 堆进全局限速队列，拖慢后续翻页 API。
+    _fetchDebounce = Timer(const Duration(milliseconds: 300), _maybeFetch);
+  }
+
+  void _maybeFetch() {
+    if (!mounted) return;
+    final notifier = ref.read(threadRateLogsProvider(widget.tid).notifier);
+    if (!notifier.isMarked(widget.pid)) return;
+    unawaited(notifier.ensureRateLog(widget.pid));
+    // 兜底路径（v1 降级页的整页 HTML）可能晚于首次构建返回：2 秒后再查一次，
+    // 仍未命中就交给会话负缓存，不再重试。
+    _retryTimer ??= Timer(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      if (ref.read(rateLogProvider((widget.tid, widget.pid))) != null) return;
+      unawaited(notifier.ensureRateLog(widget.pid));
+    });
+  }
+
+  @override
+  void dispose() {
+    _fetchDebounce?.cancel();
+    _retryTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rateLog = ref.watch(rateLogProvider((widget.tid, widget.pid)));
     if (rateLog == null || rateLog.isEmpty) {
       return const SizedBox.shrink();
     }
-    return RateLogCard(tid: tid, pid: pid, rateLog: rateLog);
+    return RateLogCard(tid: widget.tid, pid: widget.pid, rateLog: rateLog);
   }
 }
 

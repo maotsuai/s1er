@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io' show Platform;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -13,6 +12,7 @@ import 'package:s1er/providers/image_bytes_provider.dart';
 import 'package:s1er/providers/settings_provider.dart';
 import 'package:s1er/services/s1_image_cache.dart';
 import 'package:s1er/theme/app_theme.dart';
+import 'package:s1er/utils/image_actions.dart';
 import 'package:s1er/widgets/image_viewer.dart';
 
 Uint8List _pngBytes({required int width, required int height}) {
@@ -38,23 +38,21 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets('ImageViewer shows placeholder when showImages is false',
-      (tester) async {
+  testWidgets('ImageViewer shows placeholder when showImages is false', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: false),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: false)),
           ),
         ],
         child: MaterialApp(
           theme: AppTheme.lightTheme('purple'),
           home: const Scaffold(
-            body: ImageViewer(
-              imageUrl: 'https://example.com/image.jpg',
-            ),
+            body: ImageViewer(imageUrl: 'https://example.com/image.jpg'),
           ),
         ),
       ),
@@ -66,15 +64,15 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
-  testWidgets('ImageViewer still renders emoticon when showImages is false',
-      (tester) async {
+  testWidgets('ImageViewer still renders emoticon when showImages is false', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: false),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: false)),
           ),
         ],
         child: MaterialApp(
@@ -95,8 +93,9 @@ void main() {
     expect(find.text('[图片]'), findsNothing);
   });
 
-  testWidgets('ImageViewer accepts distinct preview and full URLs',
-      (tester) async {
+  testWidgets('ImageViewer accepts distinct preview and full URLs', (
+    tester,
+  ) async {
     const preview = 'https://img.stage1st.com/forum/a.png.thumb.jpg';
     const full = 'https://img.stage1st.com/forum/a.png';
 
@@ -105,10 +104,7 @@ void main() {
         child: MaterialApp(
           theme: AppTheme.lightTheme('purple'),
           home: const Scaffold(
-            body: ImageViewer(
-              imageUrl: preview,
-              fullImageUrl: full,
-            ),
+            body: ImageViewer(imageUrl: preview, fullImageUrl: full),
           ),
         ),
       ),
@@ -119,8 +115,9 @@ void main() {
     expect(viewer.fullImageUrl, full);
   });
 
-  testWidgets('ImageViewer shows tap placeholder in manual mode',
-      (tester) async {
+  testWidgets('ImageViewer shows tap placeholder in manual mode', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -136,9 +133,7 @@ void main() {
         child: MaterialApp(
           theme: AppTheme.lightTheme('purple'),
           home: const Scaffold(
-            body: ImageViewer(
-              imageUrl: 'https://example.com/image.jpg',
-            ),
+            body: ImageViewer(imageUrl: 'https://example.com/image.jpg'),
           ),
         ),
       ),
@@ -158,8 +153,9 @@ void main() {
     expect(region.cursor, SystemMouseCursors.click);
   });
 
-  testWidgets('ImageViewer auto-loads on wifi when policy is wifiOnly',
-      (tester) async {
+  testWidgets('ImageViewer auto-loads on wifi when policy is wifiOnly', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -200,8 +196,9 @@ void main() {
     expect(find.text('点击加载图片'), findsNothing);
   });
 
-  testWidgets('ImageViewer defers load on cellular when policy is wifiOnly',
-      (tester) async {
+  testWidgets('ImageViewer defers load on cellular when policy is wifiOnly', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -242,8 +239,9 @@ void main() {
     expect(find.text('点击加载图片'), findsOneWidget);
   });
 
-  testWidgets('ImageViewer defers load until visible when deferUntilVisible',
-      (tester) async {
+  testWidgets('ImageViewer defers load until visible when deferUntilVisible', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -283,67 +281,67 @@ void main() {
     expect(find.text('点击加载图片'), findsNothing);
   });
 
-  testWidgets('block ImageViewer centers within content; emoticon stays inline',
-      (tester) async {
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: false),
+  testWidgets(
+    'block ImageViewer centers within content; emoticon stays inline',
+    (tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsProvider.overrideWith(
+              () => SettingsNotifier(
+                initial: const AppSettings(showImages: false),
+              ),
             ),
-          ),
-        ],
-        child: MaterialApp(
-          theme: AppTheme.lightTheme('purple'),
-          home: const Scaffold(
-            body: SizedBox(
-              width: 400,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  ImageViewer(
-                    imageUrl: 'https://example.com/post.jpg',
-                    showBorder: true,
-                  ),
-                  ImageViewer(
-                    imageUrl:
-                        'https://avatar.stage1st.com/000/00/00/01_avatar_small.jpg',
-                    isEmoticon: true,
-                  ),
-                ],
+          ],
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: const Scaffold(
+              body: SizedBox(
+                width: 400,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    ImageViewer(
+                      imageUrl: 'https://example.com/post.jpg',
+                      showBorder: true,
+                    ),
+                    ImageViewer(
+                      imageUrl:
+                          'https://avatar.stage1st.com/000/00/00/01_avatar_small.jpg',
+                      isEmoticon: true,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pump();
+      );
+      await tester.pump();
 
-    final block = find.ancestor(
-      of: find.text('[图片]'),
-      matching: find.byType(Align),
-    );
-    expect(block, findsWidgets);
-    expect(
-      tester.widget<Align>(block.first).alignment,
-      Alignment.center,
-    );
+      final block = find.ancestor(
+        of: find.text('[图片]'),
+        matching: find.byType(Align),
+      );
+      expect(block, findsWidgets);
+      expect(tester.widget<Align>(block.first).alignment, Alignment.center);
 
-    final emoticon = find.byWidgetPredicate(
-      (w) =>
-          w is ImageViewer &&
-          w.isEmoticon &&
-          w.imageUrl.contains('avatar_small'),
-    );
-    expect(
-      find.descendant(of: emoticon, matching: find.byType(Align)),
-      findsNothing,
-    );
-  });
+      final emoticon = find.byWidgetPredicate(
+        (w) =>
+            w is ImageViewer &&
+            w.isEmoticon &&
+            w.imageUrl.contains('avatar_small'),
+      );
+      expect(
+        find.descendant(of: emoticon, matching: find.byType(Align)),
+        findsNothing,
+      );
+    },
+  );
 
-  testWidgets('block ImageViewer respects compact full width on phone',
-      (tester) async {
+  testWidgets('block ImageViewer respects compact full width on phone', (
+    tester,
+  ) async {
     tester.view.physicalSize = const Size(390, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
@@ -353,9 +351,8 @@ void main() {
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: false),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: false)),
           ),
         ],
         child: MaterialApp(
@@ -384,8 +381,9 @@ void main() {
     expect(maxWidth, 360);
   });
 
-  testWidgets('ImageViewer decodes malformed http://data: inline image',
-      (tester) async {
+  testWidgets('ImageViewer decodes malformed http://data: inline image', (
+    tester,
+  ) async {
     final bytes = _pngBytes(width: 120, height: 40);
     final malformed = 'http://data:image/png;base64,${base64Encode(bytes)}';
 
@@ -393,9 +391,8 @@ void main() {
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: true),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: true)),
           ),
           wifiConnectedProvider.overrideWith((ref) async* {
             yield true;
@@ -404,10 +401,7 @@ void main() {
         child: MaterialApp(
           theme: AppTheme.lightTheme('purple'),
           home: Scaffold(
-            body: SizedBox(
-              width: 360,
-              child: ImageViewer(imageUrl: malformed),
-            ),
+            body: SizedBox(width: 360, child: ImageViewer(imageUrl: malformed)),
           ),
         ),
       ),
@@ -421,15 +415,15 @@ void main() {
     expect(find.byIcon(Icons.broken_image_outlined), findsNothing);
   });
 
-  testWidgets('failed inline image keeps compact error placeholder',
-      (tester) async {
+  testWidgets('failed inline image keeps compact error placeholder', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: true),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: true)),
           ),
         ],
         child: MaterialApp(
@@ -463,9 +457,8 @@ void main() {
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: true),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: true)),
           ),
           wifiConnectedProvider.overrideWith((ref) async* {
             yield true;
@@ -477,9 +470,7 @@ void main() {
         ],
         child: MaterialApp(
           theme: AppTheme.lightTheme('purple'),
-          home: const Scaffold(
-            body: ImageViewer(imageUrl: url),
-          ),
+          home: const Scaffold(body: ImageViewer(imageUrl: url)),
         ),
       ),
     );
@@ -492,23 +483,32 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 
-    final platformActions = Platform.isLinux ? findsNothing : findsOneWidget;
-    expect(find.text('下载'), platformActions);
-    expect(find.text('分享'), platformActions);
-    expect(find.text('复制图片'), platformActions);
+    // Linux 无相册/文件分享/写图片通道，三项按设计隐藏。
+    expect(
+      find.text('下载'),
+      canDownloadImageOnPlatform ? findsOneWidget : findsNothing,
+    );
+    expect(
+      find.text('分享'),
+      canShareImageOnPlatform ? findsOneWidget : findsNothing,
+    );
+    expect(
+      find.text('复制图片'),
+      canCopyImageOnPlatform ? findsOneWidget : findsNothing,
+    );
     expect(find.text('复制链接'), findsOneWidget);
     expect(find.text('图片信息'), findsOneWidget);
   });
 
-  testWidgets('emoticon long-press does not open the action menu',
-      (tester) async {
+  testWidgets('emoticon long-press does not open the action menu', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
           settingsProvider.overrideWith(
-            () => SettingsNotifier(
-              initial: const AppSettings(showImages: true),
-            ),
+            () =>
+                SettingsNotifier(initial: const AppSettings(showImages: true)),
           ),
           wifiConnectedProvider.overrideWith((ref) async* {
             yield true;

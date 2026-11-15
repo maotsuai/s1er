@@ -1,3 +1,4 @@
+import './s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
@@ -324,13 +325,16 @@ class _NavActionButtonState extends State<_NavActionButton> {
     final scheme = Theme.of(context).colorScheme;
     return Tooltip(
       message: widget.tooltip,
+      // 语义标签已经描述了动作，Tooltip 若再贡献一次，
+      // 读屏会念成「下一楼（长按到底部） 下一楼」。
+      excludeFromSemantics: true,
       child: Semantics(
         button: true,
         label: widget.semanticLabel,
         hint: widget.semanticHint,
         child: Material(
           color: Colors.transparent,
-          child: InkWell(
+          child: S1InkWell(
             onTap: _onTap,
             onLongPress: widget.onLongPress == null ? null : _onLongPress,
             customBorder: const CircleBorder(),

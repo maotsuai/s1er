@@ -1,3 +1,4 @@
+import '../s1_ink_well.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,9 +9,14 @@ import '../../theme/app_theme.dart';
 import '../../theme/s1_haptics.dart';
 import '../../utils/s1_snack_bar.dart';
 
-/// Horizontal launcher-icon picker (Android / iOS).
+/// Horizontal icon picker.
+///
+/// Mobile switches the launcher icon; [desktop] switches the Windows window /
+/// taskbar icon and refreshes the managed desktop shortcut instead.
 class AppIconPicker extends ConsumerWidget {
-  const AppIconPicker({super.key});
+  const AppIconPicker({super.key, this.desktop = false});
+
+  final bool desktop;
 
   static const _previewSize = 56.0;
 
@@ -19,7 +25,8 @@ class AppIconPicker extends ConsumerWidget {
     final selectedId = ref.watch(settingsProvider.select((s) => s.appIcon));
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
-    final showIosHint = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+    final showIosHint =
+        !desktop && !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -34,10 +41,20 @@ class AppIconPicker extends ConsumerWidget {
                 button: true,
                 child: Tooltip(
                   message: variant.label,
-                  child: InkWell(
+                  child: S1InkWell(
                     onTap: () async {
                       if (isSelected) return;
                       S1Haptics.selection();
+                      if (desktop) {
+                        final ok = await ref
+                            .read(settingsProvider.notifier)
+                            .setDesktopIcon(variant.id);
+                        if (!context.mounted) return;
+                        if (!ok) {
+                          S1SnackBar.show(context, message: '更换桌面图标失败');
+                        }
+                        return;
+                      }
                       final confirmed = await _confirmIconChange(
                         context,
                         label: variant.label,
@@ -60,54 +77,64 @@ class AppIconPicker extends ConsumerWidget {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            width: _previewSize,
-                            height: _previewSize,
-                            child: Stack(
-                              clipBehavior: Clip.none,
-                              children: [
-                                // Bare launcher-style preview — no frame/shadow.
-                                ClipRRect(
-                                  borderRadius: S1Shape.medium,
-                                  child: Image.asset(
-                                    variant.previewAsset,
-                                    width: _previewSize,
-                                    height: _previewSize,
-                                    fit: BoxFit.cover,
-                                    errorBuilder:
-                                        (context, error, stackTrace) =>
-                                            ColoredBox(
-                                      color: scheme.surfaceContainerHighest,
-                                      child: Icon(
-                                        Icons.image_not_supported_outlined,
-                                        color: scheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                if (isSelected)
-                                  Positioned(
-                                    right: -2,
-                                    bottom: -2,
-                                    child: Container(
-                                      width: 22,
-                                      height: 22,
-                                      decoration: BoxDecoration(
-                                        color: scheme.primary,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                          color: scheme.surface,
-                                          width: 2,
+                          // 五列并排时槽位宽度可能小于 56，SizedBox 会被压成非正方形，
+                          // BoxFit.cover 于是横向裁掉构图；用 AspectRatio 保证始终正方。
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(
+                              maxWidth: _previewSize,
+                              maxHeight: _previewSize,
+                            ),
+                            child: AspectRatio(
+                              aspectRatio: 1,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  // Bare launcher-style preview — no frame/shadow.
+                                  Positioned.fill(
+                                    child: ClipRRect(
+                                      borderRadius: S1Shape.medium,
+                                      child: Image.asset(
+                                        variant.previewAsset,
+                                        fit: BoxFit.cover,
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                ColoredBox(
+                                          color: scheme.surfaceContainerHighest,
+                                          child: Center(
+                                            child: Icon(
+                                              Icons
+                                                  .image_not_supported_outlined,
+                                              color: scheme.onSurfaceVariant,
+                                            ),
+                                          ),
                                         ),
                                       ),
-                                      child: Icon(
-                                        Icons.check,
-                                        size: 12,
-                                        color: scheme.onPrimary,
-                                      ),
                                     ),
                                   ),
-                              ],
+                                  if (isSelected)
+                                    Positioned(
+                                      right: -2,
+                                      bottom: -2,
+                                      child: Container(
+                                        width: 22,
+                                        height: 22,
+                                        decoration: BoxDecoration(
+                                          color: scheme.primary,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                            color: scheme.surface,
+                                            width: 2,
+                                          ),
+                                        ),
+                                        child: Icon(
+                                          Icons.check,
+                                          size: 12,
+                                          color: scheme.onPrimary,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
                             ),
                           ),
                           const SizedBox(height: 8),

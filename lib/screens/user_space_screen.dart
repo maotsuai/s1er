@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -298,7 +299,7 @@ class _ReplyList extends ConsumerWidget {
                     }
                     final item = state.items[index];
                     return KeyedSubtree(
-                      key: ValueKey('uspace_reply_${item.pid ?? item.tid}'),
+                      key: ValueKey('uspace_reply_${item.tid}'),
                       child: _ReplyCard(item: item),
                     );
                   },
@@ -332,11 +333,11 @@ class _ThreadCard extends ConsumerWidget {
       height: 1.2,
     );
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       elevation: 0,
       color: S1Surface.card(scheme),
       shape: S1Shape.cardShape,
-      child: InkWell(
+      child: S1InkWell(
         onTap: () {
           final record = ref.read(readingRecordProvider(item.tid));
           context.push(
@@ -378,34 +379,44 @@ class _ThreadCard extends ConsumerWidget {
                 overflow: TextOverflow.ellipsis,
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  if (item.dateline > 0) ...[
-                    Text(formatTimeAgo(item.dateline), style: metaStyle),
-                    const SizedBox(width: 12),
+              // 裸数字「45万 6435」在合并后的卡片按钮里没有单位，
+              // 与帖子列表卡一致补上「浏览 / 回复」。
+              Semantics(
+                label: [
+                  if (item.dateline > 0) formatTimeAgo(item.dateline),
+                  '浏览 ${formatCount(item.views)}',
+                  '回复 ${formatCount(item.replies)}',
+                ].join('，'),
+                excludeSemantics: true,
+                child: Row(
+                  children: [
+                    if (item.dateline > 0) ...[
+                      Text(formatTimeAgo(item.dateline), style: metaStyle),
+                      const SizedBox(width: 12),
+                    ],
+                    Icon(
+                      Icons.visibility_outlined,
+                      size: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      formatCount(item.views),
+                      style: metaStyle,
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      size: 12,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      formatCount(item.replies),
+                      style: metaStyle,
+                    ),
                   ],
-                  Icon(
-                    Icons.visibility_outlined,
-                    size: 12,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    formatCount(item.views),
-                    style: metaStyle,
-                  ),
-                  const SizedBox(width: 8),
-                  Icon(
-                    Icons.chat_bubble_outline,
-                    size: 12,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 2),
-                  Text(
-                    formatCount(item.replies),
-                    style: metaStyle,
-                  ),
-                ],
+                ),
               ),
             ],
           ),
@@ -419,19 +430,24 @@ class _ReplyCard extends StatelessWidget {
   const _ReplyCard({required this.item});
   final UserSpaceItem item;
 
+  /// 一张卡最多铺开的回复摘要条数，其余折叠为计数。
+  static const maxVisibleEntries = 3;
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       elevation: 0,
       color: S1Surface.card(scheme),
       shape: S1Shape.cardShape,
-      child: InkWell(
+      child: S1InkWell(
         onTap: () {
-          final destination = item.pid != null && item.pid!.isNotEmpty
-              ? ThreadPost(item.tid, item.pid!)
+          final firstPid =
+              item.replyEntries.isEmpty ? null : item.replyEntries.first.pid;
+          final destination = firstPid != null && firstPid.isNotEmpty
+              ? ThreadPost(item.tid, firstPid)
               : ResumeThread(item.tid);
           context.push(ThreadRouteCodec.encodePath(destination));
         },
@@ -450,27 +466,39 @@ class _ReplyCard extends StatelessWidget {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              if (item.replyExcerpt != null &&
-                  item.replyExcerpt!.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                Container(
-                  padding: const EdgeInsets.only(left: 8),
-                  decoration: BoxDecoration(
-                    border: Border(
-                      left: BorderSide(
-                        color: scheme.outlineVariant,
-                        width: 2,
+              // 同一主题的多条回复合并在同一张卡里，避免标题/版块重复出现；
+              // 一页里同一主题可能十几条，全部铺开会挤掉后续主题。
+              for (final entry
+                  in item.replyEntries.take(_ReplyCard.maxVisibleEntries))
+                if (entry.excerpt.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Container(
+                    padding: const EdgeInsets.only(left: 8),
+                    decoration: BoxDecoration(
+                      border: Border(
+                        left: BorderSide(
+                          color: scheme.outlineVariant,
+                          width: 2,
+                        ),
                       ),
                     ),
-                  ),
-                  child: Text(
-                    item.replyExcerpt!,
-                    style: textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      height: 1.4,
+                    child: Text(
+                      entry.excerpt,
+                      style: textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                        height: 1.4,
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              if (item.replyEntries.length > _ReplyCard.maxVisibleEntries) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '还有 ${item.replyEntries.length - _ReplyCard.maxVisibleEntries} 条回复',
+                  style: textTheme.labelSmall?.copyWith(
+                    color: scheme.onSurfaceVariant,
                   ),
                 ),
               ],

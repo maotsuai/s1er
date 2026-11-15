@@ -18,6 +18,7 @@ import 'talker.dart';
 import '../models/app_exceptions.dart';
 import 's1_http_event.dart';
 import '../utils/server_notice.dart';
+import '../utils/discuz_error_body.dart';
 
 class S1HttpClient {
   S1HttpClient(this._ref)
@@ -205,6 +206,12 @@ class S1HttpClient {
           handler.next(response);
         },
         onError: (error, handler) {
+          // App API 的错误响应可能携带认证数据，沿用调用端的脱敏错误处理。
+          if (_requestUri(error.requestOptions).path.contains('/api/app/')) {
+            handler.next(error);
+            return;
+          }
+          _logRejectedResponse(error);
           // 错误体里可能携带着官方公告（维护页 / 网关错误页 / 5xx JSON）：
           // 抽得出原文才升级提示，抽不出则维持原错误与通用文案。
           final notice = ServerNotice.fromErrorBody(error.response?.data);
@@ -220,6 +227,27 @@ class S1HttpClient {
                 message: error.message,
                 stackTrace: error.stackTrace,
                 error: ServerMaintenanceException(notice),
+              ),
+            );
+            return;
+          }
+          // 无公告可提取的 5xx：把响应体压成一句原因带进错误语义，别让
+          // 「服务器暂时不可用」吞掉 Discuz 的 System Error / 安全校验原文。
+          final status = error.response?.statusCode;
+          if (status != null && status >= 500) {
+            final body = _responseBodyText(error.response?.data);
+            handler.next(
+              DioException(
+                requestOptions: error.requestOptions,
+                response: error.response,
+                type: error.type,
+                message: error.message,
+                stackTrace: error.stackTrace,
+                error: ServerBusyException(
+                  statusCode: status,
+                  detail: summarizeErrorBody(body),
+                  securityRejected: looksLikeDiscuzSecurityReject(body),
+                ),
               ),
             );
             return;
@@ -592,6 +620,57 @@ class S1HttpClient {
       return Uri.parse(path);
     }
     return Uri.parse('https://${ResourceDomains.apiHost}$path');
+  }
+
+  /// 服务端拒绝对话时（5xx / 403 / 429）把响应体与关键响应头写进 Talker。
+  ///
+  /// 只在 debug / profile 构建生效：这条日志用于定位论坛侧故障，release 下
+  /// 既不诊断也没有价值，还会把服务端内容写进日志历史。
+  /// TalkerDioLogger 默认不打印错误体，线上只看到 `Status: 503` 无法判断是
+  /// 网关过载、php-fpm 耗尽还是 WAF 拦截。这里采样响应体前 300 字符与少量
+  /// 响应头；不记录请求头、Cookie 与表单内容。
+  static const Set<String> _diagnosticResponseHeaders = {
+    'server',
+    'x-powered-by',
+    'retry-after',
+    'content-type',
+    'x-cache',
+    'cf-ray',
+    'x-ratelimit-limit',
+    'x-ratelimit-remaining',
+  };
+
+  static void _logRejectedResponse(DioException error) {
+    if (kReleaseMode) return;
+    final response = error.response;
+    final status = response?.statusCode;
+    if (response == null || status == null) return;
+    if (status < 500 && status != 403 && status != 429) return;
+
+    final headers = <String>[];
+    for (final entry in response.headers.map.entries) {
+      final key = entry.key.toLowerCase();
+      if (!_diagnosticResponseHeaders.contains(key)) continue;
+      headers.add('$key=${entry.value.join(",")}');
+    }
+
+    var body =
+        _responseBodyText(response.data).replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (body.length > 300) body = '${body.substring(0, 300)}…';
+
+    talker.debug(
+      'HTTP $status ${error.requestOptions.method} '
+      '${_requestUri(error.requestOptions)}'
+      '${headers.isEmpty ? '' : ' | ${headers.join(' ')}'}'
+      '${body.isEmpty ? '' : ' | body: $body'}',
+    );
+  }
+
+  static String _responseBodyText(dynamic data) {
+    if (data is String) return data;
+    if (data is List<int>) return utf8.decode(data, allowMalformed: true);
+    if (data == null) return '';
+    return data.toString();
   }
 
   /// 关闭事件流。仅用于测试。

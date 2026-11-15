@@ -1,9 +1,13 @@
+import 'package:flutter/semantics.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:s1er/models/post.dart';
 import 'package:s1er/models/rate_log.dart';
 import 'package:s1er/providers/thread_rate_logs_provider.dart';
+import 'package:s1er/services/http_client.dart';
+import 'package:s1er/services/rate_log_service.dart';
 import 'package:s1er/theme/app_theme.dart';
 import 'package:s1er/widgets/post_item.dart';
 import 'package:s1er/widgets/rate_log_card.dart';
@@ -108,6 +112,189 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('评分 +2'), findsOneWidget);
+    });
+
+    testWidgets('rating card keeps its own tap target inside a list item',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      const rateLog = PostRateLog(
+        pid: '1',
+        entries: [RateLog(username: 'a', score: 2)],
+        totalScore: 2,
+        participantCount: 1,
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          ListView(
+            children: const [
+              Card(
+                child: Column(
+                  children: [
+                    Text('楼层正文'),
+                    RateLogCard(tid: '123', pid: '1'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          tid: '123',
+          seed: {'1': rateLog},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 评分卡的展开/收起动作不能并进楼层节点，否则整楼被读成一个可点组。
+      final bodyNode =
+          tester.getSemantics(find.text('楼层正文')).getSemanticsData();
+      expect(bodyNode.hasAction(SemanticsAction.tap), isFalse);
+
+      final cardNode = tester
+          .getSemantics(
+            find.descendant(
+              of: find.byType(RateLogCard),
+              matching: find.byType(InkWell),
+            ),
+          )
+          .getSemanticsData();
+      expect(cardNode.hasAction(SemanticsAction.tap), isTrue);
+      handle.dispose();
+    });
+
+    testWidgets('rating entry profile button announces the name once',
+        (tester) async {
+      final handle = tester.ensureSemantics();
+      const rateLog = PostRateLog(
+        pid: '1',
+        entries: [RateLog(uid: '42', username: 'alice', score: 2)],
+        totalScore: 2,
+        participantCount: 1,
+      );
+
+      await tester.pumpWidget(
+        wrap(
+          const RateLogCard(tid: '123', pid: '1'),
+          tid: '123',
+          seed: {'1': rateLog},
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final label = tester
+          .getSemantics(
+            find
+                .descendant(
+                  of: find.byType(RateLogCard),
+                  matching: find.byType(InkWell),
+                )
+                .first,
+          )
+          .getSemanticsData()
+          .label;
+      expect(label, isNot(contains('查看 alice 的资料')));
+      // 评分人按钮保持独立节点，用户名只念一次。
+      expect(
+        find.bySemanticsLabel(RegExp(r'^查看 alice 的资料$')),
+        findsOneWidget,
+      );
+      expect(
+        find.bySemanticsLabel(RegExp(r'查看 alice 的资料\s+alice')),
+        findsNothing,
+      );
+      handle.dispose();
+    });
+
+    testWidgets('PostItem fetches only marked pids when built', (tester) async {
+      clearRateLogSessionCacheForTest();
+      final service = _RecordingRateLogService();
+      final container = ProviderContainer(
+        overrides: [rateLogServiceProvider.overrideWithValue(service)],
+      );
+      addTearDown(container.dispose);
+      final sub = container.listen(threadRateLogsProvider('123'), (_, __) {});
+      addTearDown(sub.close);
+      container
+          .read(threadRateLogsProvider('123').notifier)
+          .markPids(['1', '2']);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: Scaffold(
+              body: PostItem(
+                post: _post(pid: '1'),
+                tid: '123',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(service.requestedPids, ['1']);
+    });
+
+    testWidgets('PostItem does not fetch unmarked pids', (tester) async {
+      clearRateLogSessionCacheForTest();
+      final service = _RecordingRateLogService();
+      final container = ProviderContainer(
+        overrides: [rateLogServiceProvider.overrideWithValue(service)],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: Scaffold(
+              body: PostItem(
+                post: _post(pid: '1'),
+                tid: '123',
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(service.requestedPids, isEmpty);
+    });
+
+    testWidgets('PostItem cancels rate fetch when disposed before debounce',
+        (tester) async {
+      clearRateLogSessionCacheForTest();
+      final service = _RecordingRateLogService();
+      final container = ProviderContainer(
+        overrides: [rateLogServiceProvider.overrideWithValue(service)],
+      );
+      addTearDown(container.dispose);
+      final sub = container.listen(threadRateLogsProvider('123'), (_, __) {});
+      addTearDown(sub.close);
+      container.read(threadRateLogsProvider('123').notifier).markPids(['1']);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: Scaffold(
+              body: PostItem(
+                post: _post(pid: '1'),
+                tid: '123',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // 楼层在防抖窗口内被移出构建范围（快速划过/翻页）。
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(service.requestedPids, isEmpty);
     });
 
     testWidgets('expands to show entries on tap', (tester) async {
@@ -317,4 +504,27 @@ void main() {
       expect(reasonText.overflow, isNull);
     });
   });
+}
+
+Post _post({required String pid}) {
+  return Post(
+    pid: pid,
+    message: 'body',
+    author: 'author',
+    authorId: '1',
+    dateline: 0,
+    floor: 1,
+  );
+}
+
+class _RecordingRateLogService extends RateLogService {
+  _RecordingRateLogService() : super(S1HttpClient.test(null, Dio()));
+
+  final List<String> requestedPids = [];
+
+  @override
+  Future<PostRateLog?> fetchRateLog(String tid, String pid) async {
+    requestedPids.add(pid);
+    return null;
+  }
 }

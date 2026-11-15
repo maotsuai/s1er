@@ -15,6 +15,24 @@ class NoticeListTile extends StatelessWidget {
   final NoticeItem item;
   final VoidCallback onTap;
 
+  /// 提醒正文以作者名开头（`作者 回复了您的帖子 …`），而标题行已显示作者名。
+  /// 重复一遍只会挤掉正文，读屏也会连读两次。
+  static String summaryWithoutAuthor(String summary, String authorName) {
+    final text = summary.trimLeft();
+    if (authorName.isEmpty || !text.startsWith(authorName)) return summary;
+    final rest =
+        text.substring(authorName.length).replaceFirst(RegExp(r'^\s*'), '');
+    return rest.isEmpty ? summary : rest;
+  }
+
+  /// 摘要末尾的「查看」是提醒里的链接文字，整行已可点击，留着只是噪声。
+  static String displaySummary(String summary, String authorName) {
+    final text = summaryWithoutAuthor(summary, authorName)
+        .replaceFirst(RegExp(r'\s*查看\s*$'), '')
+        .trimRight();
+    return text.isEmpty ? summary : text;
+  }
+
   IconData _iconForType() {
     switch (item.type) {
       case NoticeType.reply:
@@ -41,10 +59,13 @@ class NoticeListTile extends StatelessWidget {
       child: ListTile(
         onTap: item.canNavigate ? S1Haptics.wrapTap(onTap) : null,
         shape: S1Shape.cardShape,
-        leading: WebAvatar(
-          url: item.avatarUrl,
-          radius: 22,
-          fallbackLetter: letter,
+        leading: ExcludeSemantics(
+          // 头像首字母只是占位，混进合并后的按钮文本会成为噪声。
+          child: WebAvatar(
+            url: item.avatarUrl,
+            radius: 22,
+            fallbackLetter: letter,
+          ),
         ),
         title: Row(
           children: [
@@ -70,7 +91,7 @@ class NoticeListTile extends StatelessWidget {
           ],
         ),
         subtitle: Text(
-          item.summary,
+          displaySummary(item.summary, item.authorName),
           maxLines: 3,
           overflow: TextOverflow.ellipsis,
           style: textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),

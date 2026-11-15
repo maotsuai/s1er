@@ -1,3 +1,4 @@
+import './s1_ink_well.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,10 +8,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../config/constants.dart';
 import '../config/env_config.dart';
 import '../models/emoticon_catalog.dart';
+import '../models/post_attachment.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/author_color_cache.dart';
 import '../utils/author_style_stripper.dart';
+import '../utils/format_utils.dart';
 import '../utils/post_body_cache.dart';
 import '../utils/bbcode_parser.dart';
 import '../utils/post_image_index_counter.dart';
@@ -28,6 +31,7 @@ import 'scroll_pointer_gate.dart';
 import 's1_reading_swipe.dart';
 import '../models/thread_destination.dart';
 import '../utils/thread_navigation.dart';
+import '../theme/s1_mouse_cursors.dart';
 
 final _anchorTag = RegExp(r'<a\s', caseSensitive: false);
 
@@ -72,6 +76,13 @@ class BbcodeRenderer extends ConsumerWidget {
     this.selectable = true,
     this.highlightQuery,
     this.stripSpecialStyles = false,
+    this.attachments = const {},
+    this.quoteJumpEnabled = true,
+    this.bodyFontSize,
+    this.imageMargin,
+    this.blockImageAlignment = Alignment.center,
+    this.showImageBorder = true,
+    this.zeroBodyMargin = false,
   });
 
   final String bbcode;
@@ -80,6 +91,9 @@ class BbcodeRenderer extends ConsumerWidget {
   final String? currentTid;
   final bool imagesExpanded;
   final VoidCallback? onExpandImages;
+
+  /// 楼层附件表（aid → 元数据）；正文 `[attach]` / `[attachimg]` 依赖它还原地址。
+  final Map<String, PostAttachment> attachments;
 
   /// 顶层是否包 [SelectionArea]。Dialog / 路由切换首帧易触发
   /// `!debugNeedsLayout`（Flutter #125065），预览等浮层应关。
@@ -91,6 +105,25 @@ class BbcodeRenderer extends ConsumerWidget {
   /// 为 true 时剥离作者特殊样式（字色 / 底色 / 字号）并跳过色适配；
   /// 由调用方按「全局开关 OR 本楼会话标记」计算后传入。
   final bool stripSpecialStyles;
+
+  /// 为 false 时引用头不显示跳转图标、不响应点击（分享卡等静态导出）。
+  final bool quoteJumpEnabled;
+
+  /// 覆盖正文字号（如分享卡使用 `ShareCard.shareBodySize`）；默认 null 走
+  /// [S1Typography.defaultBodySize]。
+  final double? bodyFontSize;
+
+  /// 覆盖块级图片外边距（默认 `EdgeInsets.symmetric(vertical: 8)`）。
+  final EdgeInsetsGeometry? imageMargin;
+
+  /// 块级图片在内容栏内的对齐方式（默认居中；分享卡左对齐正文边缘）。
+  final AlignmentGeometry blockImageAlignment;
+
+  /// 为 false 时省略块级图片 1px 描边（分享卡去框用）。
+  final bool showImageBorder;
+
+  /// 为 true 时清零 `flutter_html` 默认 `body` 8px 外边距，使正文与外层左边界严格对齐。
+  final bool zeroBodyMargin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -148,6 +181,7 @@ class BbcodeRenderer extends ConsumerWidget {
           child: Center(
             child: ExcludeFocus(
               child: ActionChip(
+                mouseCursor: S1MouseCursors.clickable,
                 avatar: Icon(
                   Icons.image_outlined,
                   size: 18,
@@ -213,6 +247,12 @@ class BbcodeRenderer extends ConsumerWidget {
           currentTid: currentTid,
           highlightQuery: highlightQuery,
           stripSpecialStyles: stripSpecialStyles,
+          quoteJumpEnabled: quoteJumpEnabled,
+          bodyFontSize: bodyFontSize,
+          imageMargin: imageMargin,
+          blockImageAlignment: blockImageAlignment,
+          showImageBorder: showImageBorder,
+          zeroBodyMargin: zeroBodyMargin,
         ),
       );
     }
@@ -231,12 +271,14 @@ class BbcodeRenderer extends ConsumerWidget {
         showImages: showImages,
         maxImagesPerPost: maxImagesPerPost,
         quoteDepth: quoteDepth,
+        attachmentsSignature: _attachmentsSignature,
       ),
       build: () => _profiledBbcode(
         'parse',
         () => BbcodeParser.parse(
           cleanedText,
           imageIndexCounter: imageIndexCounter,
+          attachments: attachments,
         ),
         detail: (value) =>
             'cache-miss links=${_countAnchors(value)} len=${value.length}',
@@ -256,6 +298,13 @@ class BbcodeRenderer extends ConsumerWidget {
       imageIndexCounter.assign();
     }
   }
+
+  /// 附件表参与解析结果，必须进缓存键；按 aid 排序后压成短签名。
+  String get _attachmentsSignature {
+    if (attachments.isEmpty) return '';
+    final aids = attachments.keys.toList()..sort();
+    return aids.map((aid) => '$aid:${attachments[aid]!.imageUrl}').join('|');
+  }
 }
 
 class _MemoizedHtmlBlock extends StatefulWidget {
@@ -270,6 +319,12 @@ class _MemoizedHtmlBlock extends StatefulWidget {
     this.currentTid,
     this.highlightQuery,
     this.stripSpecialStyles = false,
+    this.quoteJumpEnabled = true,
+    this.bodyFontSize,
+    this.imageMargin,
+    this.blockImageAlignment = Alignment.center,
+    this.showImageBorder = true,
+    this.zeroBodyMargin = false,
   });
 
   final String html;
@@ -282,6 +337,12 @@ class _MemoizedHtmlBlock extends StatefulWidget {
   final String? currentTid;
   final String? highlightQuery;
   final bool stripSpecialStyles;
+  final bool quoteJumpEnabled;
+  final double? bodyFontSize;
+  final EdgeInsetsGeometry? imageMargin;
+  final AlignmentGeometry blockImageAlignment;
+  final bool showImageBorder;
+  final bool zeroBodyMargin;
   @override
   State<_MemoizedHtmlBlock> createState() => _MemoizedHtmlBlockState();
 }
@@ -318,7 +379,13 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
         widget.maxImagesPerPost != _cachedMaxImages ||
         widget.imagesExpanded != _cachedImagesExpanded ||
         widget.highlightQuery != _cachedHighlightQuery ||
-        widget.stripSpecialStyles != _cachedStripSpecialStyles) {
+        widget.stripSpecialStyles != _cachedStripSpecialStyles ||
+        widget.quoteJumpEnabled != oldWidget.quoteJumpEnabled ||
+        widget.bodyFontSize != oldWidget.bodyFontSize ||
+        widget.imageMargin != oldWidget.imageMargin ||
+        widget.blockImageAlignment != oldWidget.blockImageAlignment ||
+        widget.showImageBorder != oldWidget.showImageBorder ||
+        widget.zeroBodyMargin != oldWidget.zeroBodyMargin) {
       _cachedHtml = widget.html;
       _cachedShowImages = widget.showImages;
       _cachedMaxImages = widget.maxImagesPerPost;
@@ -367,12 +434,21 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
     if (highlight != null && highlight.trim().isNotEmpty) {
       html = PageSearch.highlightHtml(html, highlight);
     }
+    // flutter_html 的根节点不匹配 style map 里的 'body'（根样式直接取自
+    // theme.textTheme.bodyMedium），因此正文样式挂在一个显式包裹的类上。
+    html = '<div class="s1-body">$html</div>';
     final profileDetail = 'links=${_countAnchors(html)} len=${html.length}';
     final textTheme = Theme.of(context).textTheme;
-    final bodySize = S1Typography.bodySize(textTheme);
+    // 阅读正文取固定排版 token，不读 bodyMedium.fontSize（ADR 0011 决策 4）；
+    // 分享卡等显式传入 [bodyFontSize] 时覆盖。
+    final bodySize =
+        widget.bodyFontSize ?? S1Typography.defaultBodySize.toDouble();
+    final blockImageMargin =
+        widget.imageMargin ?? const EdgeInsets.symmetric(vertical: 8);
     final codeSize = S1Typography.codeSize(textTheme);
-    final bodyLineHeight = S1Typography.bodyLineHeight(textTheme);
-    final codeFontFamily = textTheme.bodySmall?.fontFamily ?? 'monospace';
+    // 等宽族不能从 textTheme 取：桌面主题族已被钉成 CJK 无衬线，
+    // `bodySmall.fontFamily ?? 'monospace'` 的 `??` 永不命中。
+    final codeFallback = S1Fonts.monoFallback(textTheme.bodyMedium?.fontFamily);
 
     bool shouldShowPostImage(int index) {
       if (!showImages) return false;
@@ -381,9 +457,14 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
     }
 
     final style = {
-      'body': Style(
+      if (widget.zeroBodyMargin)
+        'body': Style(
+          margin: Margins.zero,
+          padding: HtmlPaddings.zero,
+        ),
+      '.s1-body': Style(
         fontSize: FontSize(bodySize),
-        lineHeight: LineHeight.number(bodyLineHeight),
+        lineHeight: const LineHeight(S1Typography.readingLineHeight),
         margin: Margins.zero,
         padding: HtmlPaddings.zero,
         color: scheme.onSurface,
@@ -402,7 +483,8 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
         backgroundColor: scheme.surfaceContainerHighest,
         padding: HtmlPaddings.all(12),
         margin: Margins.symmetric(vertical: 8),
-        fontFamily: codeFontFamily,
+        fontFamily: S1Fonts.monoFamily,
+        fontFamilyFallback: codeFallback.isEmpty ? null : codeFallback,
         fontSize: FontSize(codeSize),
         display: Display.block,
       ),
@@ -471,9 +553,10 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
             return ImageViewer(
               imageUrl: preview,
               fullImageUrl: full,
-              showBorder: true,
-              margin: const EdgeInsets.symmetric(vertical: 8),
+              showBorder: widget.showImageBorder,
+              margin: blockImageMargin,
               deferUntilVisible: widget.deferImages,
+              blockAlignment: widget.blockImageAlignment,
             );
           }
 
@@ -489,10 +572,12 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
             );
           }
           if (src.isNotEmpty) {
-            return ImageViewer(
-              imageUrl: src,
-              isEmoticon: true,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
+            return ExcludeSemantics(
+              child: ImageViewer(
+                imageUrl: src,
+                isEmoticon: true,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+              ),
             );
           }
           return EmoticonWidget(code: code);
@@ -512,10 +597,12 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
                 child: EmoticonImage(item: item, size: 24),
               );
             }
-            return ImageViewer(
-              imageUrl: src,
-              isEmoticon: true,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
+            return ExcludeSemantics(
+              child: ImageViewer(
+                imageUrl: src,
+                isEmoticon: true,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
+              ),
             );
           }
 
@@ -526,9 +613,10 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
           return ImageViewer(
             imageUrl: urls.previewUrl,
             fullImageUrl: urls.fullUrl,
-            showBorder: true,
-            margin: const EdgeInsets.symmetric(vertical: 8),
+            showBorder: widget.showImageBorder,
+            margin: blockImageMargin,
             deferUntilVisible: widget.deferImages,
+            blockAlignment: widget.blockImageAlignment,
           );
         },
       ),
@@ -538,19 +626,78 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
           final author = _unescapeHtml(context.attributes['author'] ?? '引用');
           final link = context.attributes['href'];
 
-          final parsedLink = link != null && link.isNotEmpty
-              ? QuoteJumpParser.parsePostLink(
-                  link,
-                  fallbackTid: widget.currentTid,
-                )
-              : null;
+          final parsedLink =
+              widget.quoteJumpEnabled && link != null && link.isNotEmpty
+                  ? QuoteJumpParser.parsePostLink(
+                      link,
+                      fallbackTid: widget.currentTid,
+                    )
+                  : null;
+
+          // 作者与「发表于 时间」拆开：作者名保持强调色，时间走次级色；
+          // 源帖常写 `2026-11-7 16:44`，这里归一成与楼层时间一致的格式。
+          final headerMatch =
+              RegExp(r'^(.*?)\s*发表于\s*(.*)$').firstMatch(author);
+          final authorName = (headerMatch?.group(1)?.trim().isNotEmpty ?? false)
+              ? headerMatch!.group(1)!.trim()
+              : author;
+          final rawTime = headerMatch?.group(2)?.trim() ?? '';
+          final time = rawTime.isEmpty ? '' : formatLooseDateTime(rawTime);
+          final headerStyle = textTheme.bodySmall;
+
+          final header = Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.format_quote,
+                  size: 15,
+                  color: scheme.primary,
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(
+                          text: authorName,
+                          style: headerStyle?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: scheme.primary,
+                          ),
+                        ),
+                        if (time.isNotEmpty)
+                          TextSpan(
+                            text: ' 发表于 $time',
+                            style: headerStyle?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                if (parsedLink != null)
+                  Icon(
+                    Icons.open_in_new,
+                    size: 13,
+                    color: scheme.onSurfaceVariant,
+                  ),
+              ],
+            ),
+          );
+
+          // 静态导出（分享卡）不保留点击语义与跳转图标。
+          if (!widget.quoteJumpEnabled) return header;
 
           return Material(
             color: Colors.transparent,
             child: Semantics(
               button: parsedLink != null,
               label: parsedLink != null ? '跳转到引用帖子' : null,
-              child: InkWell(
+              child: S1InkWell(
                 borderRadius: S1Shape.small,
                 onTap: parsedLink != null
                     ? () {
@@ -563,39 +710,7 @@ class _MemoizedHtmlBlockState extends State<_MemoizedHtmlBlock> {
                         );
                       }
                     : null,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 8,
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.format_quote,
-                        size: 15,
-                        color: scheme.primary,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          author,
-                          style: textTheme.bodySmall?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: scheme.primary,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (parsedLink != null)
-                        Icon(
-                          Icons.open_in_new,
-                          size: 13,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                    ],
-                  ),
-                ),
+                child: header,
               ),
             ),
           );

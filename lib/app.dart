@@ -18,7 +18,7 @@ import 'providers/whats_new_provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/forum_list_screen.dart';
-import 'screens/thread_detail_screen.dart';
+import 'screens/thread_route_screen.dart';
 import 'screens/compose_screen.dart';
 import 'screens/profile_screen.dart';
 import 'screens/settings_screen.dart';
@@ -32,8 +32,11 @@ import 'screens/image_viewer_screen.dart';
 import 'screens/user_space_screen.dart';
 import 'screens/pm_conversation_screen.dart';
 import 'services/font_import_service.dart';
+import 'services/frame_timing_service.dart';
 import 'services/talker.dart';
 import 'theme/app_theme.dart';
+import 'theme/s1_text_scaler.dart';
+import 'utils/app_messenger.dart';
 import 'utils/thread_navigation.dart';
 import 'widgets/s1_bottom_overlay_style.dart';
 import 'widgets/s1_desktop_window_frame.dart';
@@ -102,12 +105,18 @@ final _router = GoRouter(
       pageBuilder: (context, state) {
         final tid = state.pathParameters['tid']!;
         final intent = ThreadRouteCodec.intentFromUri(state.uri, tid: tid);
+        final fidHint =
+            state.uri.queryParameters[ThreadRouteCodec.threadFidQuery];
         return NoTransitionPage<void>(
           key: state.pageKey,
           child: ThreadOpenIntentScope(
             tid: tid,
             intent: intent,
-            child: ThreadDetailScreen(tid: tid),
+            child: ThreadRouteScreen(
+              tid: tid,
+              intent: intent,
+              fidHint: fidHint,
+            ),
           ),
         );
       },
@@ -237,6 +246,12 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 掉帧日志带上当前路由：一条 [frame-timing] 告警即可归属到页面，
+    // 不必再靠时间戳比对其它日志。路由尚未初始化时退化为 `-`。
+    FrameTimingService.instance.routeResolver = () {
+      final config = _router.routerDelegate.currentConfiguration;
+      return config.isEmpty ? '-' : config.uri.toString();
+    };
   }
 
   @override
@@ -274,7 +289,7 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
     );
 
     final customFontFamily =
-        customFontFileName != null ? FontImportService.kFontFamily : null;
+        customFontFileName != null ? FontImportService.activeFamily : null;
 
     final themeMode = switch (themeModeStr) {
       'light' => ThemeMode.light,
@@ -286,6 +301,7 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
       talker: talker,
       options: const TalkerWrapperOptions(enableErrorAlerts: true),
       child: MaterialApp.router(
+        scaffoldMessengerKey: s1MessengerKey,
         title: S1Constants.appName,
         theme: AppTheme.lightTheme(
           themeColor,
@@ -298,10 +314,15 @@ class _S1AppState extends ConsumerState<S1App> with WidgetsBindingObserver {
         themeMode: themeMode,
         routerConfig: _router,
         builder: (context, child) {
+          final media = MediaQuery.of(context);
           return MediaQuery(
-            data: MediaQuery.of(
-              context,
-            ).copyWith(textScaler: TextScaler.linear(textScaleFactor)),
+            // 档位叠在系统无障碍字号之上，而不是替换它。
+            data: media.copyWith(
+              textScaler: S1ComposedTextScaler.compose(
+                media.textScaler,
+                textScaleFactor,
+              ),
+            ),
             child: S1BottomOverlayStyle(
               child: S1DesktopWindowFrame(
                 child: UpdatePromptHost(

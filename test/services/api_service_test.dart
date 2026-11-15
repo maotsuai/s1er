@@ -390,8 +390,8 @@ void main() {
       });
     });
 
-    group('parseCommentCount', () {
-      test('parses comment count map from viewthread JSON', () {
+    group('parseRateMarkedPids', () {
+      test('returns pid keys from viewthread JSON', () {
         final json = {
           'Variables': {
             'commentcount': {
@@ -401,12 +401,22 @@ void main() {
           },
         };
 
-        expect(DiscuzParser.parseCommentCount(json), {'100': 2, '200': 0});
+        expect(DiscuzParser.parseRateMarkedPids(json), {'100', '200'});
       });
 
-      test('returns empty map when commentcount is missing', () {
+      test('returns empty set when commentcount is missing', () {
         final json = {'Variables': <String, dynamic>{}};
-        expect(DiscuzParser.parseCommentCount(json), isEmpty);
+        expect(DiscuzParser.parseRateMarkedPids(json), isEmpty);
+      });
+
+      test('keeps pid keys when commentcount values are null', () {
+        final json = {
+          'Variables': {
+            'commentcount': {'70365643': null},
+          },
+        };
+
+        expect(DiscuzParser.parseRateMarkedPids(json), {'70365643'});
       });
     });
 
@@ -1180,6 +1190,43 @@ window.location.href = 'forum.php?mod=viewthread&tid=2253488&pid=69963296&page=1
       });
     });
 
+    group('parseSpaceThreadHtml', () {
+      test('parses mobile threadlist with unpadded mtime', () {
+        const html = '''
+<div class="threadlist cl">
+<li class="list">
+<div class="threadlist_top cl">
+<a href="home.php?mod=space&amp;uid=1&amp;mobile=2" class="mimg">
+<img src="https://avatar.stage1st.com/x.jpg"></a>
+<div class="muser"><h3><a href="home.php?mod=space&amp;uid=1" class="mmc">shirolin</a></h3>
+<span class="mtime">2026-7-22</span></div>
+</div>
+<a href="forum.php?mod=viewthread&amp;tid=2286001&amp;extra=&amp;mobile=2">
+<em>标题X</em></a>
+<a href="forum.php?mod=forumdisplay&amp;fid=4&amp;mobile=2">#归墟</a>
+<i class="dm-eye-fill"></i>
+1,349
+<i class="dm-chat-s-fill"></i>
+8
+</li>
+</div>
+''';
+        final result = DiscuzParser.parseSpaceThreadHtml(html, page: 1);
+
+        expect(result.items, hasLength(1));
+        final item = result.items.single;
+        expect(item.tid, '2286001');
+        expect(item.subject, '标题X');
+        expect(item.forumName, '归墟');
+        expect(item.views, 1349);
+        expect(item.replies, 8);
+        expect(
+          item.dateline,
+          DateTime(2026, 7, 22).millisecondsSinceEpoch ~/ 1000,
+        );
+      });
+    });
+
     group('parseSpaceReplyHtml', () {
       test('parses desktop ptid-then-pid links', () {
         const html = '''
@@ -1196,9 +1243,9 @@ window.location.href = 'forum.php?mod=viewthread&tid=2253488&pid=69963296&page=1
         final result = DiscuzParser.parseSpaceReplyHtml(html, page: 1);
         expect(result.items, hasLength(1));
         expect(result.items.first.tid, '100');
-        expect(result.items.first.pid, '55');
+        expect(result.items.first.replyEntries.single.pid, '55');
         expect(result.items.first.subject, '标题A');
-        expect(result.items.first.replyExcerpt, '回复摘要一');
+        expect(result.items.first.replyEntries.single.excerpt, '回复摘要一');
       });
 
       test('parses desktop pid-then-ptid links', () {
@@ -1209,8 +1256,8 @@ window.location.href = 'forum.php?mod=viewthread&tid=2253488&pid=69963296&page=1
         final result = DiscuzParser.parseSpaceReplyHtml(html, page: 1);
         expect(result.items, hasLength(1));
         expect(result.items.first.tid, '200');
-        expect(result.items.first.pid, '99');
-        expect(result.items.first.replyExcerpt, '摘要B');
+        expect(result.items.first.replyEntries.single.pid, '99');
+        expect(result.items.first.replyEntries.single.excerpt, '摘要B');
       });
 
       test('parses mobile threadlist with findpost anchors', () {
@@ -1226,9 +1273,38 @@ window.location.href = 'forum.php?mod=viewthread&tid=2253488&pid=69963296&page=1
         final result = DiscuzParser.parseSpaceReplyHtml(html, page: 1);
         expect(result.items, hasLength(1));
         expect(result.items.first.tid, '300');
-        expect(result.items.first.pid, '42');
+        expect(result.items.first.replyEntries.single.pid, '42');
         expect(result.items.first.subject, '手机标题');
-        expect(result.items.first.replyExcerpt, '手机回复');
+        expect(result.items.first.replyEntries.single.excerpt, '手机回复');
+      });
+
+      test('merges multiple replies of one thread into a single item', () {
+        const html = '''
+<div class="threadlist cl">
+<li class="list">
+<a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=400&amp;pid=" target="_blank" class="mt10">
+<div class="threadlist_tit cl"><em >同主题标题</em></div></a>
+<a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=400&amp;pid=61&amp;mobile=2" target="_blank"><div class="quote"><blockquote>第一条</blockquote></div></a>
+<a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=400&amp;pid=62&amp;mobile=2" target="_blank"><div class="quote"><blockquote>第二条</blockquote></div></a>
+</li>
+<li class="list">
+<a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=401&amp;pid=" target="_blank" class="mt10">
+<div class="threadlist_tit cl"><em >另一主题</em></div></a>
+<a href="forum.php?mod=redirect&amp;goto=findpost&amp;ptid=401&amp;pid=63&amp;mobile=2" target="_blank"><div class="quote"><blockquote>第三条</blockquote></div></a>
+</li>
+</div>
+''';
+        final result = DiscuzParser.parseSpaceReplyHtml(html, page: 1);
+
+        expect(result.items, hasLength(2));
+        expect(result.items[0].tid, '400');
+        expect(result.items[0].subject, '同主题标题');
+        expect(
+          result.items[0].replyEntries.map((e) => e.excerpt),
+          ['第一条', '第二条'],
+        );
+        expect(result.items[0].replyEntries.map((e) => e.pid), ['61', '62']);
+        expect(result.items[1].replyEntries.single.pid, '63');
       });
     });
   });

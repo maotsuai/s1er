@@ -1,176 +1,226 @@
 (() => {
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const nav = document.querySelector("[data-nav]");
-  const toggle = document.querySelector("[data-nav-toggle]");
-  const mobileMenu = document.querySelector("[data-mobile-menu]");
+  const root = document.documentElement;
 
-  // —— Sticky nav scroll state ——
-  const onScroll = () => {
-    if (!nav) return;
-    nav.classList.toggle("is-scrolled", window.scrollY > 8);
+  // —— 明暗主题 ——
+  const themeBtn = document.querySelector("[data-theme-toggle]");
+  const themeMeta = document.querySelector('meta[name="theme-color"]');
+
+  const applyTheme = (theme) => {
+    root.dataset.theme = theme;
+    const light = theme === "light";
+    if (themeBtn) {
+      themeBtn.setAttribute("aria-pressed", String(light));
+      themeBtn.setAttribute("aria-label", light ? "切换到深色主题" : "切换到浅色主题");
+    }
+    if (themeMeta) themeMeta.setAttribute("content", light ? "#f5f5f8" : "#09090b");
   };
-  onScroll();
-  window.addEventListener("scroll", onScroll, { passive: true });
 
-  // —— Mobile nav ——
-  if (toggle && mobileMenu && nav) {
-    const setOpen = (open) => {
-      nav.classList.toggle("is-open", open);
-      toggle.setAttribute("aria-expanded", String(open));
-      toggle.setAttribute("aria-label", open ? "关闭菜单" : "打开菜单");
-      mobileMenu.hidden = !open;
+  applyTheme(root.dataset.theme === "light" ? "light" : "dark");
+
+  if (themeBtn) {
+    themeBtn.addEventListener("click", () => {
+      const next = root.dataset.theme === "light" ? "dark" : "light";
+      applyTheme(next);
+      try {
+        localStorage.setItem("s1er-theme", next);
+      } catch {
+        // 隐私模式下存不了，本次切换照常生效
+      }
+    });
+  }
+
+  // —— 首屏帖子：引用进回复框 ——
+  const heroBtns = [...document.querySelectorAll("[data-hero-quote]")];
+  const heroLine = document.querySelector("[data-compose-line]");
+
+  const buildQuote = (dataset, onCancel) => {
+    const label = document.createElement("b");
+    label.textContent = `引用 ${dataset.quoteFloor} · ${dataset.quoteAuthor}`;
+    const text = document.createElement("span");
+    text.textContent = dataset.quoteText;
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "app__cancel";
+    cancel.textContent = "取消";
+    cancel.addEventListener("click", onCancel);
+    return [label, text, cancel];
+  };
+
+  if (heroBtns.length && heroLine) {
+    const hint = heroLine.innerHTML;
+    const status = document.querySelector("[data-compose-status]");
+    const say = (msg) => {
+      if (status) status.textContent = msg;
     };
 
-    toggle.addEventListener("click", () => {
-      setOpen(toggle.getAttribute("aria-expanded") !== "true");
-    });
+    const reset = () => {
+      heroLine.innerHTML = hint;
+      heroBtns.forEach((b) => b.setAttribute("aria-pressed", "false"));
+    };
 
-    mobileMenu.querySelectorAll("a").forEach((link) => {
-      link.addEventListener("click", () => setOpen(false));
-    });
-
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") setOpen(false);
+    heroBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        heroBtns.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+        heroLine.replaceChildren(
+          ...buildQuote(btn.dataset, () => {
+            reset();
+            say(`已取消引用 ${btn.dataset.quoteFloor}`);
+          }),
+        );
+        say(`已引用 ${btn.dataset.quoteFloor}，回复框带上了出处`);
+      });
     });
   }
 
-  // —— Active section highlighting ——
-  const menuLinks = document.querySelectorAll(".site-nav__menu a[href^='#']");
-  const sections = [...menuLinks]
-    .map((a) => {
-      const id = a.getAttribute("href")?.slice(1);
-      return id ? document.getElementById(id) : null;
-    })
-    .filter(Boolean);
+  // —— 一层楼：菜单与引用 ——
+  const floorMore = document.querySelector("[data-floor-more]");
+  const floorMenu = document.querySelector("[data-floor-menu]");
+  const floorLine = document.querySelector("[data-floor-compose]");
+  const floorWord = document.querySelector("[data-quote-word]");
+  const floorBtns = [...document.querySelectorAll("[data-quote-btn], [data-floor-quote]")];
 
-  if (menuLinks.length && sections.length && "IntersectionObserver" in window) {
-    const sectionObserver = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const id = entry.target.id;
-          menuLinks.forEach((link) => {
-            link.classList.toggle("is-active", link.getAttribute("href") === `#${id}`);
-          });
+  if (floorMore && floorMenu) {
+    floorMore.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const open = floorMore.getAttribute("aria-expanded") !== "true";
+      floorMore.setAttribute("aria-expanded", String(open));
+      floorMenu.hidden = !open;
+    });
+  }
+
+  if (floorLine && floorBtns.length) {
+    const hint = floorLine.innerHTML;
+
+    const reset = () => {
+      floorLine.innerHTML = hint;
+      floorBtns.forEach((b) => b.setAttribute("aria-pressed", "false"));
+      if (floorWord) floorWord.textContent = "回帖";
+    };
+
+    floorBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        floorBtns.forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+        floorLine.replaceChildren(...buildQuote(btn.dataset, reset));
+        if (floorWord) floorWord.textContent = "已引用";
+        if (floorMenu) {
+          floorMenu.hidden = true;
+          floorMore?.setAttribute("aria-expanded", "false");
         }
-      },
-      { rootMargin: "-35% 0px -55% 0px", threshold: 0 },
-    );
-    sections.forEach((el) => sectionObserver.observe(el));
+      });
+    });
   }
 
-  // —— Scroll reveal ——
-  const targets = document.querySelectorAll(".reveal");
+  // —— 种子色与字号：整个页面跟着换 ——
+  const seedBtns = [...document.querySelectorAll(".seed")];
+  const sizeBtns = [...document.querySelectorAll(".sizes button")];
+
+  const applySeed = (seed) => {
+    root.dataset.seed = seed;
+    seedBtns.forEach((b) => {
+      const on = b.dataset.seed === seed;
+      b.classList.toggle("is-on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
+  };
+
+  const applySize = (size) => {
+    root.dataset.size = size;
+    sizeBtns.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.size === size)));
+  };
+
+  const remember = (key, value) => {
+    try {
+      localStorage.setItem(key, value);
+    } catch {
+      // 隐私模式下存不了，本次切换照常生效
+    }
+  };
+
+  if (seedBtns.length) {
+    applySeed(root.dataset.seed || "blue");
+    seedBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        applySeed(btn.dataset.seed);
+        remember("s1er-seed", btn.dataset.seed);
+      });
+    });
+  }
+
+  if (sizeBtns.length) {
+    applySize(root.dataset.size || "normal");
+    sizeBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        applySize(btn.dataset.size);
+        remember("s1er-size", btn.dataset.size);
+      });
+    });
+  }
+
+  // —— 段落入场 ——
+  const parts = [];
+  document.querySelectorAll(".section").forEach((section) => {
+    const items = section.querySelectorAll(":scope > .wrap > *");
+    items.forEach((el, i) => {
+      el.classList.add("part");
+      el.style.setProperty("--d", `${i * 80}ms`);
+      parts.push(el);
+    });
+  });
+
   if (reduceMotion || !("IntersectionObserver" in window)) {
-    targets.forEach((el) => el.classList.add("is-visible"));
-  } else if (targets.length) {
+    parts.forEach((el) => el.classList.add("is-in"));
+  } else {
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            entry.target.classList.add("is-visible");
-            observer.unobserve(entry.target);
-          }
-        }
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-in");
+          observer.unobserve(entry.target);
+        });
       },
-      { rootMargin: "0px 0px -6% 0px", threshold: 0.1 },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.05 },
     );
-    targets.forEach((el) => observer.observe(el));
+    parts.forEach((el) => observer.observe(el));
   }
 
-  // —— Showcase tabs ——
-  const tabs = document.querySelectorAll("[data-showcase]");
-  const panels = document.querySelectorAll("[data-panel]");
-
-  if (tabs.length && panels.length) {
-    const activate = (key) => {
-      tabs.forEach((tab) => {
-        const active = tab.getAttribute("data-showcase") === key;
-        tab.classList.toggle("is-active", active);
-        tab.setAttribute("aria-selected", String(active));
-      });
-      panels.forEach((panel) => {
-        const match = panel.getAttribute("data-panel") === key;
-        panel.hidden = !match;
-        panel.classList.toggle("is-active", match);
-      });
-    };
-
-    tabs.forEach((tab) => {
-      tab.addEventListener("click", () => {
-        const key = tab.getAttribute("data-showcase");
-        if (key) activate(key);
-      });
-    });
-
-    // ARIA tabs pattern: roving focus with arrow keys / Home / End.
-    const focusAndActivate = (tab) => {
-      const key = tab.getAttribute("data-showcase");
-      if (!key) return;
-      tab.focus();
-      activate(key);
-    };
-    tabs.forEach((tab, i) => {
-      tab.addEventListener("keydown", (e) => {
-        if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-          e.preventDefault();
-          focusAndActivate(tabs[(i + 1) % tabs.length]);
-        } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-          e.preventDefault();
-          focusAndActivate(tabs[(i - 1 + tabs.length) % tabs.length]);
-        } else if (e.key === "Home") {
-          e.preventDefault();
-          focusAndActivate(tabs[0]);
-        } else if (e.key === "End") {
-          e.preventDefault();
-          focusAndActivate(tabs[tabs.length - 1]);
-        }
-      });
-    });
-  }
-
-  // —— Version from public latest.json (best-effort) ——
-  const versionPills = document.querySelectorAll("[data-version-pill]");
+  // —— 版本（尽力而为，失败不打扰）——
   const versionTexts = document.querySelectorAll("[data-version-text]");
+  if (!versionTexts.length) return;
 
-  const applyVersion = (version, notes) => {
-    if (!version) return;
-    versionPills.forEach((el) => {
-      el.textContent = `v${version}`;
-      el.hidden = false;
-    });
-    versionTexts.forEach((el) => {
-      el.textContent = notes ? `当前 v${version} · ${notes}` : `当前 v${version}`;
-    });
-  };
-
-  // GitHub raw may be blocked by CORS on Pages; try multiple sources silently.
-  const versionSources = [
+  const sources = [
     "https://raw.githubusercontent.com/Shirolin/s1er/main/docs/release/latest.json",
     "https://cdn.jsdelivr.net/gh/Shirolin/s1er@main/docs/release/latest.json",
   ];
 
+  const apply = (version, notes) => {
+    versionTexts.forEach((el) => {
+      const line = notes.replace(/^Beta\s*[—–-]\s*[\d.]+\s*[：:]\s*/, "").trim();
+      el.textContent = line ? `当前 v${version} · ${line}` : `当前 v${version}`;
+    });
+  };
+
   const fetchVersion = async () => {
-    for (const url of versionSources) {
+    for (const url of sources) {
       try {
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) continue;
         const data = await res.json();
-        if (data?.latest) {
-          applyVersion(String(data.latest), data.notes ? String(data.notes) : "");
+        if (data && data.latest) {
+          apply(String(data.latest), data.notes ? String(data.notes) : "");
           return true;
         }
       } catch {
-        // try next source
+        // 换下一个源
       }
     }
     return false;
   };
 
-  fetchVersion().then((resolved) => {
-    if (resolved) return;
+  fetchVersion().then((ok) => {
+    if (ok) return;
     versionTexts.forEach((el) => {
-      el.textContent = "最新版本与更新说明见 GitHub Releases";
+      el.textContent = "版本与更新说明见 GitHub Releases";
     });
   });
 })();

@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -480,7 +481,7 @@ class _ForumHitTile extends StatelessWidget {
       color: S1Surface.card(scheme),
       shape: S1Shape.cardShape,
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
+      child: S1InkWell(
         onTap: () {
           S1Haptics.selection();
           context.push(
@@ -572,10 +573,13 @@ class _UserHitTile extends ConsumerWidget {
       clipBehavior: Clip.antiAlias,
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: WebAvatar(
-          url: avatarUrl,
-          radius: 20,
-          fallbackLetter: hit.name.isNotEmpty ? hit.name[0] : '?',
+        leading: ExcludeSemantics(
+          // 头像首字母是占位图，混进 ListTile 合并文本会被读成多余字符。
+          child: WebAvatar(
+            url: avatarUrl,
+            radius: 20,
+            fallbackLetter: hit.name.isNotEmpty ? hit.name[0] : '?',
+          ),
         ),
         title: Text(hit.name, style: textTheme.titleMedium),
         subtitle: Text(

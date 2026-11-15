@@ -1,16 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../config/constants.dart';
 import '../models/open_scroll_target.dart';
 import '../models/post.dart';
 import '../models/poll.dart';
+import '../models/thread.dart';
 import '../models/thread_open_intent.dart';
 import '../services/api_service.dart';
 import '../services/discuz_parser.dart';
-import '../services/http_client.dart';
 import '../services/poll_vote_cache.dart';
-import '../services/rate_log_service.dart';
 import '../services/talker.dart';
 import '../utils/thread_navigation.dart';
 import 'api_service_provider.dart';
@@ -34,6 +34,8 @@ class PostListState {
     this.filterAuthorId,
     this.filterAuthorName,
     this.allowReply = true,
+    this.rateMarkedPids = const {},
+    this.needsRateLogPageFallback = false,
     this.openScrollTarget,
     this.locateError,
   });
@@ -50,6 +52,8 @@ class PostListState {
   final String? filterAuthorId;
   final String? filterAuthorName;
   final bool allowReply;
+  final Set<String> rateMarkedPids;
+  final bool needsRateLogPageFallback;
 
   /// 首屏一次性滚动落点；Screen 消费后应通过 [clearOpenScrollTarget] 清除。
   final OpenScrollTarget? openScrollTarget;
@@ -93,6 +97,8 @@ class PostListState {
       filterAuthorName:
           clearFilter ? null : (filterAuthorName ?? this.filterAuthorName),
       allowReply: allowReply ?? this.allowReply,
+      rateMarkedPids: rateMarkedPids,
+      needsRateLogPageFallback: needsRateLogPageFallback,
       openScrollTarget: clearOpenScrollTarget
           ? null
           : (openScrollTarget ?? this.openScrollTarget),
@@ -100,10 +106,6 @@ class PostListState {
     );
   }
 }
-
-final rateLogServiceProvider = Provider<RateLogService>((ref) {
-  return RateLogService(ref.watch(httpClientProvider));
-});
 
 final pollVoteCacheProvider =
     Provider.autoDispose.family<PollVoteCache, String>((ref, uid) {
@@ -301,16 +303,27 @@ class PostNotifier extends AsyncNotifier<PostListState> {
     final page = loaded.currentPage;
     _syncSeenRepliesAfterLoad(loaded);
 
-    // 评分明细只在 HTML viewthread 的 #ratelog_*；Mobile JSON 的 postlist
-    // 不含楼层 rate（thread.rate 仅主题级标记）。会话缓存避免同页重复拉取。
-    unawaited(
+    if (loaded.needsRateLogPageFallback) {
+      unawaited(
+        ref.read(threadRateLogsProvider(tid).notifier).ensurePageRateLogs(page),
+      );
+    } else {
       ref
           .read(threadRateLogsProvider(tid).notifier)
-          .ensurePageRateLogs(page)
-          .catchError((Object e, StackTrace st) {
-        talker.handle(e, st, 'ensurePageRateLogs failed tid=$tid page=$page');
-      }),
-    );
+          .markPids(loaded.rateMarkedPids);
+    }
+  }
+
+  /// 是否允许回复。
+  ///
+  /// `closed` 是两版 API 都稳定给出的开关（1 = 已关闭），优先按它否决；
+  /// `allowreply` 在 v4 / v1 下都常为空，有值时再补一刀。两者都缺失时
+  /// 保持可回复，与历史行为一致。
+  static bool _resolveAllowReply(Map<String, dynamic> thread) {
+    if (thread['closed']?.toString() == '1') return false;
+    final allowReply = thread['allowreply']?.toString().trim() ?? '';
+    if (allowReply.isEmpty) return true;
+    return allowReply != '0';
   }
 
   /// 打开置顶帖时对齐 live / lastSeen（不碰阅读记录）。
@@ -334,7 +347,7 @@ class PostNotifier extends AsyncNotifier<PostListState> {
     final totalReplies = int.tryParse(thread['replies']?.toString() ?? '') ?? 0;
     final totalPosts = totalReplies + 1;
     final totalPages = (totalPosts / perPage).ceil().clamp(1, 9999);
-    final allowReply = thread['allowreply']?.toString() != '0';
+    final allowReply = _resolveAllowReply(thread);
     final threadSpecial =
         int.tryParse(thread['special']?.toString() ?? '') ?? 0;
 
@@ -342,7 +355,9 @@ class PostNotifier extends AsyncNotifier<PostListState> {
       posts: parsedPosts,
       currentPage: page,
       totalPages: totalPages,
-      threadSubject: thread['subject']?.toString(),
+      threadSubject: thread['subject'] == null
+          ? null
+          : Thread.decodeThreadText(thread['subject'].toString()),
       threadFid: thread['fid']?.toString(),
       threadSpecial: threadSpecial,
       perPage: perPage,
@@ -353,6 +368,9 @@ class PostNotifier extends AsyncNotifier<PostListState> {
       filterAuthorId: _filterAuthorId,
       filterAuthorName: _filterAuthorName,
       allowReply: allowReply,
+      rateMarkedPids: DiscuzParser.parseRateMarkedPids(result),
+      needsRateLogPageFallback: result['Version'] == ApiService.appApiVersion ||
+          result['Version']?.toString() == ApiService.legacyApiVersion,
     );
   }
 
@@ -386,9 +404,7 @@ class PostNotifier extends AsyncNotifier<PostListState> {
     return _showPage(page, ScrollToFloor(absoluteFloor));
   }
 
-  Future<void> goToPage(int page) async {
-    await _showPage(page, const ScrollToPageTop());
-  }
+  Future<bool> goToPage(int page) => _showPage(page, const ScrollToPageTop());
 
   /// 命中时同步展示缓存，远程校验不阻塞翻页或重置滚动落点。
   Future<bool> _showPage(int page, OpenScrollTarget target) async {
@@ -408,8 +424,9 @@ class PostNotifier extends AsyncNotifier<PostListState> {
       state = previous == null ? loaded : AsyncValue.data(previous);
       return false;
     }
-    state =
-        AsyncValue.data(loaded.requireValue.copyWith(openScrollTarget: target));
+    state = AsyncValue.data(
+      loaded.requireValue.copyWith(openScrollTarget: target),
+    );
     return true;
   }
 

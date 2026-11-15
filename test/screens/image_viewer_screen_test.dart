@@ -1,5 +1,4 @@
 import 'dart:math' as math;
-import 'dart:io' show Platform;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -15,6 +14,7 @@ import 'package:s1er/providers/settings_provider.dart';
 import 'package:s1er/screens/image_viewer_screen.dart';
 import 'package:s1er/services/s1_image_cache.dart';
 import 'package:s1er/theme/app_theme.dart';
+import 'package:s1er/utils/image_actions.dart';
 import 'package:s1er/widgets/image_viewer.dart';
 
 Uint8List _pngBytes({required int width, required int height}) {
@@ -64,10 +64,7 @@ void main() {
             GoRoute(
               path: '/',
               builder: (context, state) => const Scaffold(
-                body: ImageViewer(
-                  imageUrl: preview,
-                  fullImageUrl: full,
-                ),
+                body: ImageViewer(imageUrl: preview, fullImageUrl: full),
               ),
             ),
             GoRoute(
@@ -121,77 +118,76 @@ void main() {
       },
     );
 
-    testWidgets(
-      'passes bytes when preview and full URLs are the same',
-      (tester) async {
-        const url = 'https://img.stage1st.com/forum/same.png';
-        final bytes = _pngBytes(width: 40, height: 30);
+    testWidgets('passes bytes when preview and full URLs are the same', (
+      tester,
+    ) async {
+      const url = 'https://img.stage1st.com/forum/same.png';
+      final bytes = _pngBytes(width: 40, height: 30);
 
-        Map<String, dynamic>? pushedExtra;
+      Map<String, dynamic>? pushedExtra;
 
-        final router = GoRouter(
-          initialLocation: '/',
-          routes: [
-            GoRoute(
-              path: '/',
-              builder: (context, state) => const Scaffold(
-                body: ImageViewer(imageUrl: url),
-              ),
-            ),
-            GoRoute(
-              path: '/image-viewer',
-              builder: (context, state) {
-                if (state.extra is Map<String, dynamic>) {
-                  pushedExtra = Map<String, dynamic>.from(
-                    state.extra! as Map<String, dynamic>,
-                  );
-                }
-                return const Scaffold(body: Text('viewer'));
-              },
-            ),
-          ],
-        );
-
-        await tester.pumpWidget(
-          ProviderScope(
-            overrides: [
-              settingsProvider.overrideWith(
-                () => SettingsNotifier(
-                  initial: const AppSettings(showImages: true),
-                ),
-              ),
-              wifiConnectedProvider.overrideWith((ref) async* {
-                yield true;
-              }),
-              imageBytesProvider.overrideWith((ref, u) async {
-                expect(u, url);
-                return bytes;
-              }),
-            ],
-            child: MaterialApp.router(
-              theme: AppTheme.lightTheme('purple'),
-              routerConfig: router,
-            ),
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) =>
+                const Scaffold(body: ImageViewer(imageUrl: url)),
           ),
-        );
+          GoRoute(
+            path: '/image-viewer',
+            builder: (context, state) {
+              if (state.extra is Map<String, dynamic>) {
+                pushedExtra = Map<String, dynamic>.from(
+                  state.extra! as Map<String, dynamic>,
+                );
+              }
+              return const Scaffold(body: Text('viewer'));
+            },
+          ),
+        ],
+      );
 
-        await tester.pump();
-        await tester.pump(const Duration(milliseconds: 100));
-        await tester.pump();
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            settingsProvider.overrideWith(
+              () => SettingsNotifier(
+                initial: const AppSettings(showImages: true),
+              ),
+            ),
+            wifiConnectedProvider.overrideWith((ref) async* {
+              yield true;
+            }),
+            imageBytesProvider.overrideWith((ref, u) async {
+              expect(u, url);
+              return bytes;
+            }),
+          ],
+          child: MaterialApp.router(
+            theme: AppTheme.lightTheme('purple'),
+            routerConfig: router,
+          ),
+        ),
+      );
 
-        expect(find.byType(Image), findsWidgets);
-        await tester.tap(find.byType(Image).first);
-        await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
 
-        expect(pushedExtra?['imageUrl'], url);
-        expect(pushedExtra?['imageBytes'], same(bytes));
-      },
-    );
+      expect(find.byType(Image), findsWidgets);
+      await tester.tap(find.byType(Image).first);
+      await tester.pumpAndSettle();
+
+      expect(pushedExtra?['imageUrl'], url);
+      expect(pushedExtra?['imageBytes'], same(bytes));
+    });
   });
 
   group('ImageViewerScreen', () {
-    testWidgets('shows error and retries when bytes fetch fails',
-        (tester) async {
+    testWidgets('shows error and retries when bytes fetch fails', (
+      tester,
+    ) async {
       var attempts = 0;
 
       await tester.pumpWidget(
@@ -246,10 +242,7 @@ void main() {
 
       // 顶栏与底栏使用 surfaceContainerHigh（浅色主题下为浅色表面），
       // 不应有局部的 SystemUiOverlayStyle.light 覆盖，交由全局 S1BottomOverlayStyle 驱动。
-      expect(
-        find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
-        findsNothing,
-      );
+      expect(find.byType(AnnotatedRegion<SystemUiOverlayStyle>), findsNothing);
     });
 
     testWidgets('fit / 1:1 / zoom step match scale semantics', (tester) async {
@@ -292,10 +285,7 @@ void main() {
         contentSize.height / imageH,
       );
 
-      expect(
-        controller.value.getMaxScaleOnAxis(),
-        closeTo(expectedFit, 0.05),
-      );
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(expectedFit, 0.05));
 
       // 机制锁：必须保持 infinite，禁用框架内置边界钳制（flutter#191482
       // 长图大坐标下 _exceedsBy 浮点误判 → 平移写 0 跳回图片开头）。
@@ -309,10 +299,7 @@ void main() {
 
       await tester.tap(find.byTooltip('合适'));
       await tester.pump();
-      expect(
-        controller.value.getMaxScaleOnAxis(),
-        closeTo(expectedFit, 0.05),
-      );
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(expectedFit, 0.05));
 
       final beforeZoom = controller.value.getMaxScaleOnAxis();
       await tester.tap(find.byTooltip('放大'));
@@ -324,10 +311,7 @@ void main() {
 
       await tester.tap(find.byTooltip('缩小'));
       await tester.pump();
-      expect(
-        controller.value.getMaxScaleOnAxis(),
-        closeTo(beforeZoom, 0.05),
-      );
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(beforeZoom, 0.05));
     });
 
     testWidgets(
@@ -401,6 +385,147 @@ void main() {
       },
     );
 
+    testWidgets('long image opens with short-edge fit anchored at top', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const imageW = 500;
+      const imageH = 5000;
+      final bytes = _pngBytes(width: imageW, height: imageH);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: ImageViewerScreen(
+              imageUrl: 'https://img.stage1st.com/forum/long.png',
+              imageBytes: bytes,
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+
+      final viewerFinder = find.byType(InteractiveViewer);
+      final viewer = tester.widget<InteractiveViewer>(viewerFinder);
+      final controller = viewer.transformationController!;
+      final viewport = tester.getSize(viewerFinder);
+
+      final cover = math.max(viewport.width / imageW, viewport.height / imageH);
+      final fit = math.min(viewport.width / imageW, viewport.height / imageH);
+
+      Offset translation() {
+        final t = controller.value.getTranslation();
+        return Offset(t.x, t.y);
+      }
+
+      // 长短边比 10:1：默认短边适配，纵向从图片顶部开始阅读。
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(cover, 0.01));
+      expect(translation().dy, closeTo(0, 0.5));
+      expect(
+        translation().dx,
+        closeTo((viewport.width - imageW * cover) / 2, 0.5),
+      );
+
+      // 「合适」恢复整图可见并居中。
+      await tester.tap(find.byTooltip('合适'));
+      await tester.pump();
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(fit, 0.01));
+      expect(
+        translation().dy,
+        closeTo((viewport.height - imageH * fit) / 2, 0.5),
+      );
+
+      // 「填满」回到短边适配，且重新锚定顶部（不回落到图片中部）。
+      await tester.tap(find.byTooltip('填满'));
+      await tester.pump();
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(cover, 0.01));
+      expect(translation().dy, closeTo(0, 0.5));
+    });
+
+    testWidgets('wide image opens with short-edge fit anchored at left', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(400, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      const imageW = 5000;
+      const imageH = 500;
+      final bytes = _pngBytes(width: imageW, height: imageH);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: ImageViewerScreen(
+              imageUrl: 'https://img.stage1st.com/forum/wide.png',
+              imageBytes: bytes,
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+
+      final viewerFinder = find.byType(InteractiveViewer);
+      final viewer = tester.widget<InteractiveViewer>(viewerFinder);
+      final controller = viewer.transformationController!;
+      final viewport = tester.getSize(viewerFinder);
+
+      final cover = math.max(viewport.width / imageW, viewport.height / imageH);
+
+      expect(controller.value.getMaxScaleOnAxis(), closeTo(cover, 0.01));
+      expect(controller.value.getTranslation().x, closeTo(0, 0.5));
+      expect(
+        controller.value.getTranslation().y,
+        closeTo((viewport.height - imageH * cover) / 2, 0.5),
+      );
+    });
+
+    testWidgets('control bar keeps every control on 320dp screens', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final bytes = _pngBytes(width: 400, height: 200);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          child: MaterialApp(
+            theme: AppTheme.lightTheme('purple'),
+            home: ImageViewerScreen(
+              imageUrl: 'https://img.stage1st.com/forum/photo.png',
+              imageBytes: bytes,
+            ),
+          ),
+        ),
+      );
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+
+      // 单行放不下 6 个控件时拆成两行，不得出现 RenderFlex 溢出。
+      expect(tester.takeException(), isNull);
+      for (final tooltip in ['合适', '填满', '缩小', '放大', '原始大小']) {
+        expect(find.byTooltip(tooltip), findsOneWidget);
+      }
+    });
+
     testWidgets('fetches imageUrl when opened without bytes', (tester) async {
       final requested = <String>[];
       final bytes = _pngBytes(width: 80, height: 60);
@@ -463,16 +588,26 @@ void main() {
       await tester.longPress(find.byType(InteractiveViewer));
       await tester.pumpAndSettle();
 
-      final platformActions = Platform.isLinux ? findsNothing : findsOneWidget;
-      expect(find.text('下载'), platformActions);
-      expect(find.text('分享'), platformActions);
-      expect(find.text('复制图片'), platformActions);
+      // Linux 无相册/文件分享/写图片通道，三项按设计隐藏。
+      expect(
+        find.text('下载'),
+        canDownloadImageOnPlatform ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('分享'),
+        canShareImageOnPlatform ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('复制图片'),
+        canCopyImageOnPlatform ? findsOneWidget : findsNothing,
+      );
       expect(find.text('复制链接'), findsOneWidget);
       expect(find.text('图片信息'), findsOneWidget);
     });
 
-    testWidgets('secondary tap (right-click) opens the action menu',
-        (tester) async {
+    testWidgets('secondary tap (right-click) opens the action menu', (
+      tester,
+    ) async {
       await pumpReadyViewer(tester);
 
       final gesture = await tester.startGesture(
@@ -488,8 +623,9 @@ void main() {
       expect(find.text('图片信息'), findsOneWidget);
     });
 
-    testWidgets('copy link from menu writes the full URL to clipboard',
-        (tester) async {
+    testWidgets('copy link from menu writes the full URL to clipboard', (
+      tester,
+    ) async {
       final clipboard = <String, String?>{};
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
@@ -507,8 +643,10 @@ void main() {
         },
       );
       addTearDown(() {
-        tester.binding.defaultBinaryMessenger
-            .setMockMethodCallHandler(SystemChannels.platform, null);
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
       });
 
       await pumpReadyViewer(tester);

@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'dart:async';
 import 'dart:ui' show PointerDeviceKind;
 
@@ -8,6 +9,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../models/compose_draft.dart';
+import '../models/compose_target.dart';
 import '../models/post.dart';
 import '../models/quote_info.dart';
 import '../models/new_thread_form_info.dart';
@@ -17,6 +20,7 @@ import '../models/private_message_item.dart';
 import '../models/user.dart';
 import '../providers/auth_provider.dart';
 import '../providers/compose_provider.dart';
+import '../providers/compose_session_provider.dart';
 import '../providers/forum_name_provider.dart';
 import '../providers/image_cache_provider.dart';
 import '../providers/settings_provider.dart';
@@ -29,9 +33,6 @@ import '../utils/compose_bbcode_wrap.dart';
 import '../utils/compose_clipboard_image.dart';
 import '../utils/compose_img_tags.dart';
 import '../utils/compose_message_char_count.dart';
-import '../utils/compose_message_draft.dart';
-import '../utils/new_thread_draft.dart';
-import '../utils/edit_post_draft.dart';
 import '../utils/edit_post_message.dart';
 import '../utils/platform_image_url.dart';
 import '../utils/post_image_index_counter.dart';
@@ -50,6 +51,14 @@ import '../widgets/s1_draft_leave_dialog.dart';
 import '../widgets/s1_adaptive_sheet.dart';
 import '../widgets/s1_content_width.dart';
 import '../widgets/web_avatar.dart';
+import '../theme/s1_mouse_cursors.dart';
+
+part 'compose/compose_preview_sheet.dart';
+part 'compose/compose_meta_fields.dart';
+part 'compose/compose_header.dart';
+part 'compose/compose_message_field.dart';
+part 'compose/compose_images.dart';
+part 'compose/compose_bottom_bar.dart';
 
 const _recentEmoticonsKey = 'compose_recent_emoticons';
 const _maxBatchImages = 20;
@@ -134,7 +143,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   final List<_ComposeUploadedImage> _uploadedImages = [];
   final Map<String, String> _imageLabelsByUrl = {};
   List<String> _recentEmoticons = [];
-  Timer? _draftSaveTimer;
+  late final ProviderSubscription<ComposeSession> _sessionSubscription;
   bool _suppressDraftSave = false;
   bool _suppressMediaSync = false;
   NewThreadFormInfo? _newThreadForm;
@@ -355,9 +364,12 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     setState(() => _replaceUploadedImages(ordered));
   }
 
-  String get _draftEntryKey {
-    final tid = widget.tid ?? '';
-    return ComposeMessageDraft.entryKey(tid: tid, reppost: _quotePid);
+  ComposeSession get _session => _sessionSubscription.read();
+
+  ComposeTarget get _target {
+    if (_isEditing) return EditPostTarget(pid: widget.editPid!);
+    if (_isNewThread) return NewThreadTarget(fid: widget.fid ?? '');
+    return ReplyTarget(tid: widget.tid ?? '', reppost: _quotePid);
   }
 
   @override
@@ -372,6 +384,8 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     final pid = _quotePid;
     _includeQuote = pid != null && pid.isNotEmpty;
+    _sessionSubscription =
+        ref.listenManual(composeSessionProvider(_target), (_, __) {});
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -420,25 +434,19 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     final form =
         await ref.read(composeControllerProvider).fetchNewThreadForm(fid: fid);
     if (!mounted) return;
-    final saved = _readNewThreadDraft(fid);
-    var restored = false;
+    final saved = _session.restoreDraft();
     setState(() {
       _newThreadForm = form;
       _newThreadLoading = false;
       if (saved != null) {
-        final subject = saved['subject'] as String? ?? '';
-        final message = saved['message'] as String? ?? '';
-        if (subject.trim().isNotEmpty || message.trim().isNotEmpty) {
-          _suppressDraftSave = true;
-          _subjectController.text = subject;
-          _messageController.text = message;
-          _selectedTypeId = saved['typeId'] as String?;
-          _suppressDraftSave = false;
-          restored = true;
-        }
+        _suppressDraftSave = true;
+        _subjectController.text = saved.subject;
+        _messageController.text = saved.message;
+        _selectedTypeId = saved.typeId;
+        _suppressDraftSave = false;
       }
     });
-    if (restored && mounted) {
+    if (saved != null && mounted) {
       S1SnackBar.show(context, message: '已恢复草稿', bottomClearance: 72);
     }
   }
@@ -469,7 +477,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       });
       return;
     }
-    final saved = _readEditDraft(pid);
+    final saved = _session.restoreDraft();
     final parts = EditPostMessageParts.split(form.message);
     _mergeAttachImageUrls(widget.editAttachImageUrls);
     _mergeAttachImageUrls(form.attachImageUrls);
@@ -508,31 +516,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       if (restore) {
         _suppressDraftSave = true;
         _suppressMediaSync = true;
-        final draftMsg = saved['message'] as String? ?? mediaSplit.body;
-        final draftParts = EditPostMessageParts.split(draftMsg);
+        final draftParts = EditPostMessageParts.split(saved.message);
         // 草稿存的是可编辑正文（可含 ⟦图N⟧），不是整帖 raw。
-        final draftBodyRaw = draftParts.hasLeadingQuote
-            ? draftParts.body
-            : (saved['message'] as String? ?? draftParts.body);
+        final draftBodyRaw =
+            draftParts.hasLeadingQuote ? draftParts.body : saved.message;
         final draftMedia = _mediaFromDraft(
-          saved['mediaTags'],
-          mediaSlots: saved['mediaSlots'],
+          saved.mediaTags,
+          mediaSlots: saved.mediaSlots,
           fallbackBody: draftBodyRaw,
         );
-        _subjectController.text = saved['subject'] as String? ?? form.subject;
+        _subjectController.text = saved.subject;
         _messageController.text = draftMedia.body;
-        _selectedTypeId = saved['typeId'] as String? ?? form.selectedTypeId;
+        _selectedTypeId = saved.typeId ?? form.selectedTypeId;
         _selectedReadPerm = normalizeSelectedReadPerm(
-          saved['readPerm'] as String? ?? form.selectedReadPermission,
+          saved.readPerm ?? form.selectedReadPermission,
         );
-        final draftQuote = saved['leadingQuote'] as String?;
+        final draftQuote = saved.leadingQuote;
         setState(() {
           if (draftQuote != null && draftQuote.trim().isNotEmpty) {
             _editLeadingQuote = draftQuote;
           } else if (draftParts.hasLeadingQuote) {
             _editLeadingQuote = draftParts.leadingQuote;
           }
-          _includeEditQuote = saved['includeQuote'] as bool? ??
+          _includeEditQuote = saved.includeQuote ??
               (_editLeadingQuote != null &&
                   _editLeadingQuote!.trim().isNotEmpty);
           _applyEditMedia(draftMedia.media, slots: draftMedia.effectiveSlots);
@@ -540,18 +546,18 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _suppressMediaSync = false;
         _suppressDraftSave = false;
       } else {
-        _clearEditDraft(pid);
+        _session.clearDraft();
       }
     }
   }
 
   /// 草稿里的 `mediaTags` + 可选 `mediaSlots` + 正文（可含 `⟦图N⟧`）；旧草稿无占位时补上。
   ComposeMediaSplit _mediaFromDraft(
-    Object? mediaTags, {
-    Object? mediaSlots,
+    List<String>? mediaTags, {
+    List<int>? mediaSlots,
     required String fallbackBody,
   }) {
-    if (mediaTags is! List) {
+    if (mediaTags == null) {
       return splitComposeMediaWithPlaceholders(
         fallbackBody,
         attachImageUrls: _attachImageUrls,
@@ -559,7 +565,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     }
     final media = <ComposeMediaTag>[];
     for (final item in mediaTags) {
-      final tag = item.toString().trim();
+      final tag = item.trim();
       if (tag.isEmpty) continue;
       final parsed = splitComposeMedia(
         tag,
@@ -572,13 +578,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       }
     }
 
-    final slots = <int>[];
-    if (mediaSlots is List) {
-      for (final raw in mediaSlots) {
-        final slot = raw is int ? raw : int.tryParse(raw.toString()) ?? 0;
-        slots.add(slot);
-      }
-    }
+    final slots = [...?mediaSlots];
     while (slots.length < media.length) {
       final next = slots.isEmpty
           ? 1
@@ -611,21 +611,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
-  Map<String, Object?>? _readEditDraft(String pid) {
-    try {
-      final store = ref.read(settingsStoreProvider);
-      return EditPostDraftStore.read(
-        EditPostDraftStore.parse(
-          store.get<Object>(EditPostDraftStore.settingsKey),
-        ),
-        pid,
-      );
-    } on Object {
-      return null;
-    }
-  }
-
-  bool _editDraftDiffers(Map<String, Object?> draft, EditPostFormInfo form) {
+  bool _editDraftDiffers(ComposeDraft draft, EditPostFormInfo form) {
     final parts = EditPostMessageParts.split(form.message);
     final serverMedia = splitComposeMediaWithPlaceholders(
       parts.body,
@@ -634,15 +620,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         ...form.attachImageUrls,
       },
     );
-    final draftMsg = draft['message'] as String? ?? '';
-    final draftParts = EditPostMessageParts.split(draftMsg);
+    final draftParts = EditPostMessageParts.split(draft.message);
     final draftMedia = _mediaFromDraft(
-      draft['mediaTags'],
-      mediaSlots: draft['mediaSlots'],
+      draft.mediaTags,
+      mediaSlots: draft.mediaSlots,
       fallbackBody: draftParts.body,
     );
-    final draftInclude =
-        draft['includeQuote'] as bool? ?? draftParts.hasLeadingQuote;
+    final draftInclude = draft.includeQuote ?? draftParts.hasLeadingQuote;
     final mediaChanged = draftMedia.media.length != serverMedia.media.length ||
         List.generate(
           draftMedia.media.length,
@@ -651,16 +635,29 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     return draftMedia.body != serverMedia.body ||
         mediaChanged ||
         draftInclude != parts.hasLeadingQuote ||
-        (draft['subject'] as String? ?? '') != form.subject ||
-        (draft['typeId'] as String?) != form.selectedTypeId ||
-        (draft['readPerm'] as String?) != form.selectedReadPermission;
+        draft.subject != form.subject ||
+        draft.typeId != form.selectedTypeId ||
+        draft.readPerm != form.selectedReadPermission;
   }
 
-  void _persistEditDraft() {
+  void _saveDraft() {
     if (_suppressDraftSave) return;
-    final pid = widget.editPid;
+    if (_isEditing) {
+      _saveEditDraft();
+      return;
+    }
+    _session.saveDraft(
+      ComposeDraft(
+        subject: _subjectController.text,
+        message: _messageController.text,
+        typeId: _selectedTypeId,
+      ),
+    );
+  }
+
+  void _saveEditDraft() {
     final form = _editForm;
-    if (!_isEditing || pid == null || form == null) return;
+    if (form == null) return;
     final hadQuoteOnLoad =
         _editLeadingQuote != null && _editLeadingQuote!.trim().isNotEmpty;
     final unchanged = _messageController.text == _editLoadedBody &&
@@ -669,96 +666,22 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         _selectedReadPerm == form.selectedReadPermission &&
         _includeEditQuote == hadQuoteOnLoad &&
         !_editMediaChanged;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = EditPostDraftStore.parse(
-        store.get<Object>(EditPostDraftStore.settingsKey),
-      );
-      if (unchanged) {
-        store.put(
-          EditPostDraftStore.settingsKey,
-          EditPostDraftStore.toStoreValue(
-            EditPostDraftStore.remove(drafts, pid),
-          ),
-        );
-        return;
-      }
-      store.put(
-        EditPostDraftStore.settingsKey,
-        EditPostDraftStore.toStoreValue(
-          EditPostDraftStore.upsert(
-            drafts,
-            pid,
-            subject: _subjectController.text,
-            message: _messageController.text,
-            typeId: _selectedTypeId,
-            readPerm: _selectedReadPerm,
-            leadingQuote: _editLeadingQuote,
-            includeQuote: _includeEditQuote,
-            mediaTags: _currentMediaTags,
-            mediaSlots: _currentMediaSlots,
-          ),
-        ),
-      );
-    } on Object {
-      // 测试或无本地设置存储时跳过草稿持久化。
+    if (unchanged) {
+      _session.clearDraft();
+      return;
     }
-  }
-
-  void _clearEditDraft(String? pid) {
-    if (pid == null || pid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = EditPostDraftStore.parse(
-        store.get<Object>(EditPostDraftStore.settingsKey),
-      );
-      store.put(
-        EditPostDraftStore.settingsKey,
-        EditPostDraftStore.toStoreValue(EditPostDraftStore.remove(drafts, pid)),
-      );
-    } on Object {
-      // 无本地设置存储时跳过清理。
-    }
-  }
-
-  Map<String, Object?>? _readNewThreadDraft(String fid) {
-    try {
-      final store = ref.read(settingsStoreProvider);
-      return NewThreadDraftStore.read(
-        NewThreadDraftStore.parse(
-          store.get<Object>(NewThreadDraftStore.settingsKey),
-        ),
-        fid,
-      );
-    } on Object {
-      return null;
-    }
-  }
-
-  void _persistNewThreadDraft() {
-    if (_suppressDraftSave) return;
-    final fid = widget.fid;
-    if (!_isNewThread || fid == null || fid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = NewThreadDraftStore.parse(
-        store.get<Object>(NewThreadDraftStore.settingsKey),
-      );
-      store.put(
-        NewThreadDraftStore.settingsKey,
-        NewThreadDraftStore.toStoreValue(
-          NewThreadDraftStore.upsert(
-            drafts,
-            fid,
-            subject: _subjectController.text,
-            message: _messageController.text,
-            typeId: _selectedTypeId,
-          ),
-        ),
-      );
-    } on Object {
-      // 部分测试未注入 SettingsStore 时跳过草稿持久化。
-    }
+    _session.saveDraft(
+      ComposeDraft(
+        subject: _subjectController.text,
+        message: _messageController.text,
+        typeId: _selectedTypeId,
+        readPerm: _selectedReadPerm,
+        leadingQuote: _editLeadingQuote,
+        includeQuote: _includeEditQuote,
+        mediaTags: _currentMediaTags,
+        mediaSlots: _currentMediaSlots,
+      ),
+    );
   }
 
   Future<void> _openThreadSettingsSheet() async {
@@ -804,17 +727,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
               onTypeChanged: (value) {
                 setState(() {
                   _selectedTypeId = value;
-                  if (_isNewThread) {
-                    _persistNewThreadDraft();
-                  } else if (_isEditing) {
-                    _persistEditDraft();
-                  }
+                  _saveDraft();
                 });
               },
               onReadPermChanged: (value) {
                 setState(() {
                   _selectedReadPerm = value;
-                  _persistEditDraft();
+                  _saveDraft();
                 });
               },
             ),
@@ -834,25 +753,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     );
   }
 
-  void _clearNewThreadDraft() {
-    final fid = widget.fid;
-    if (!_isNewThread || fid == null || fid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = NewThreadDraftStore.parse(
-        store.get<Object>(NewThreadDraftStore.settingsKey),
-      );
-      store.put(
-        NewThreadDraftStore.settingsKey,
-        NewThreadDraftStore.toStoreValue(
-          NewThreadDraftStore.remove(drafts, fid),
-        ),
-      );
-    } on Object {
-      // 部分测试未注入 SettingsStore 时跳过清理。
-    }
-  }
-
   void _loadRecentEmoticons() {
     try {
       final store = ref.read(settingsStoreProvider);
@@ -868,95 +768,15 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
   }
 
   void _restoreReplyDraft() {
-    if (_isEditing || _isNewThread) return;
-    final tid = widget.tid;
-    if (tid == null || tid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = ComposeMessageDraft.parseStore(
-        store.get<Object>(ComposeMessageDraft.settingsKey),
-      );
-      final saved = ComposeMessageDraft.readMessage(drafts, _draftEntryKey);
-      if (saved == null) return;
-      _suppressDraftSave = true;
-      _messageController.value = TextEditingValue(
-        text: saved,
-        selection: TextSelection.collapsed(offset: saved.length),
-      );
-      _suppressDraftSave = false;
-      S1SnackBar.show(context, message: '已恢复草稿', bottomClearance: 72);
-    } on Object {
-      _suppressDraftSave = false;
-    }
-  }
-
-  void _scheduleReplyDraftSave() {
-    if (_suppressDraftSave || _isEditing || _isNewThread) return;
-    _draftSaveTimer?.cancel();
-    _draftSaveTimer = Timer(ComposeMessageDraft.debounce, _persistReplyDraft);
-  }
-
-  void _persistReplyDraft() {
-    if (_isEditing || _isNewThread) return;
-    final tid = widget.tid;
-    if (tid == null || tid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = ComposeMessageDraft.parseStore(
-        store.get<Object>(ComposeMessageDraft.settingsKey),
-      );
-      final key = _draftEntryKey;
-      final text = _messageController.text;
-      final next = text.trim().isEmpty
-          ? ComposeMessageDraft.removeEntry(drafts, key)
-          : ComposeMessageDraft.upsert(drafts, key, text);
-      store.put(
-        ComposeMessageDraft.settingsKey,
-        ComposeMessageDraft.toStoreValue(next),
-      );
-    } on Object {
-      // 无 settings store 时跳过。
-    }
-  }
-
-  void _clearReplyDraft() {
-    if (_isEditing || _isNewThread) return;
-    _draftSaveTimer?.cancel();
-    final tid = widget.tid;
-    if (tid == null || tid.isEmpty) return;
-    try {
-      final store = ref.read(settingsStoreProvider);
-      final drafts = ComposeMessageDraft.parseStore(
-        store.get<Object>(ComposeMessageDraft.settingsKey),
-      );
-      final next = ComposeMessageDraft.removeEntry(drafts, _draftEntryKey);
-      store.put(
-        ComposeMessageDraft.settingsKey,
-        ComposeMessageDraft.toStoreValue(next),
-      );
-    } on Object {
-      // 无 settings store 时跳过。
-    }
-  }
-
-  void _flushDraftForMode() {
-    if (_isEditing) {
-      _persistEditDraft();
-    } else if (_isNewThread) {
-      _persistNewThreadDraft();
-    } else {
-      _persistReplyDraft();
-    }
-  }
-
-  void _clearDraftForMode() {
-    if (_isEditing) {
-      _clearEditDraft(widget.editPid);
-    } else if (_isNewThread) {
-      _clearNewThreadDraft();
-    } else {
-      _clearReplyDraft();
-    }
+    final saved = _session.restoreDraft()?.message;
+    if (saved == null) return;
+    _suppressDraftSave = true;
+    _messageController.value = TextEditingValue(
+      text: saved,
+      selection: TextSelection.collapsed(offset: saved.length),
+    );
+    _suppressDraftSave = false;
+    S1SnackBar.show(context, message: '已恢复草稿', bottomClearance: 72);
   }
 
   void _onMessageChanged() {
@@ -985,21 +805,11 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
     } else if (mounted) {
       setState(() {});
     }
-    if (_isEditing) {
-      _persistEditDraft();
-    } else if (_isNewThread) {
-      _persistNewThreadDraft();
-    } else {
-      _scheduleReplyDraftSave();
-    }
+    _saveDraft();
   }
 
   void _onSubjectChanged() {
-    if (_isNewThread) {
-      _persistNewThreadDraft();
-    } else if (_isEditing) {
-      _persistEditDraft();
-    }
+    _saveDraft();
     if (mounted) setState(() {});
   }
 
@@ -1354,14 +1164,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   @override
   void dispose() {
-    _draftSaveTimer?.cancel();
-    // 仅回复模式 flush compose_message_drafts；编辑/新主题禁止写入该键。
-    if (!_allowPop &&
-        !_isEditing &&
-        !_isNewThread &&
-        _messageController.text.trim().isNotEmpty) {
-      _persistReplyDraft();
-    }
     _messageController.removeListener(_onMessageChanged);
     _subjectController.removeListener(_onSubjectChanged);
     _messageFocusNode.removeListener(_onMessageFocusChanged);
@@ -1399,7 +1201,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       _suppressMediaSync = false;
       final url = image.previewUrl;
       if (url != null) _imageLabelsByUrl.remove(url);
-      _persistEditDraft();
+      _saveDraft();
       return;
     }
     final url = image.previewUrl;
@@ -1672,7 +1474,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         ),
       );
       _suppressMediaSync = false;
-      _persistEditDraft();
+      _saveDraft();
     } else {
       final selection = _messageController.selection;
       final start =
@@ -1782,7 +1584,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                 );
         if (!mounted) return;
         if (result.isSuccess) {
-          _clearNewThreadDraft();
+          _session.clearDraft();
           _allowPopAndExit(result);
         } else {
           S1SnackBar.error(
@@ -1855,7 +1657,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             );
         if (!mounted) return;
         if (result.isSuccess) {
-          _clearEditDraft(pid);
+          _session.clearDraft();
           _allowPopAndExit(result);
         } else if (result.isConflict) {
           setState(() => _editConflict = true);
@@ -1923,7 +1725,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         if (result.isSuccess) {
           final snapshotId = widget.quoteSnapshotId;
           if (snapshotId != null) QuoteSnapshotStore.remove(snapshotId);
-          _clearReplyDraft();
+          _session.clearDraft();
           setState(() => _replyUncertain = false);
           S1SnackBar.show(
             context,
@@ -1971,7 +1773,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
 
   void _removeEditQuote() {
     setState(() => _includeEditQuote = false);
-    _persistEditDraft();
+    _saveDraft();
   }
 
   Future<void> _recheckEditState() async {
@@ -2003,7 +1805,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
         (!widget.editIsFirst ||
             latest.subject.trim() == _subjectController.text.trim());
     if (matchesDesired) {
-      _clearEditDraft(widget.editPid);
+      _session.clearDraft();
       setState(() => _editLoading = false);
       _allowPopAndExit(
         const EditPostSubmitResult.success(message: '编辑成功'),
@@ -2086,10 +1888,10 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
       case S1DraftLeaveChoice.stay:
         return;
       case S1DraftLeaveChoice.keepAndLeave:
-        _flushDraftForMode();
+        _saveDraft();
         break;
       case S1DraftLeaveChoice.discardAndLeave:
-        _clearDraftForMode();
+        _session.clearDraft();
         break;
     }
     _allowPopAndExit();
@@ -2160,7 +1962,7 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             onTypeChanged: (value) {
               setState(() {
                 _selectedTypeId = value;
-                _persistNewThreadDraft();
+                _saveDraft();
               });
             },
             onOpenThreadSettings: _openThreadSettingsSheet,
@@ -2177,13 +1979,13 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
             onTypeChanged: (value) {
               setState(() {
                 _selectedTypeId = value;
-                _persistEditDraft();
+                _saveDraft();
               });
             },
             onReadPermChanged: (value) {
               setState(() {
                 _selectedReadPerm = value;
-                _persistEditDraft();
+                _saveDraft();
               });
             },
             onOpenThreadSettings: _openThreadSettingsSheet,
@@ -2382,1477 +2184,6 @@ class _ComposeScreenState extends ConsumerState<ComposeScreen> {
                     ),
                   )
                 : formColumn,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 发帖 / 回复预览：Dialog 画布 + 一帖 Card（对齐读帖 surface 层级）。
-/// 主题在卡上方；卡内只预览楼层正文。
-class _ComposePreviewSheet extends StatelessWidget {
-  const _ComposePreviewSheet({
-    required this.subject,
-    required this.isNewThread,
-    required this.isEditing,
-    required this.quoteInfo,
-    required this.previewBbcode,
-    required this.tid,
-    required this.authorName,
-    this.authorAvatar,
-    this.attachPreviewLimited = false,
-    required this.canSubmit,
-    required this.submitLabel,
-  });
-
-  final String? subject;
-  final bool isNewThread;
-  final bool isEditing;
-  final QuoteInfo? quoteInfo;
-  final String previewBbcode;
-  final String? tid;
-  final String authorName;
-  final String? authorAvatar;
-
-  /// 仍有未解析的 `[attachimg]`，预览里可能显示附件码。
-  final bool attachPreviewLimited;
-  final bool canSubmit;
-  final String submitLabel;
-
-  String get _floorLabel {
-    if (isEditing) return '编辑';
-    if (isNewThread) return '#1';
-    return '回复';
-  }
-
-  /// 回复已有「即将回复」副文案，不再叠一颗「回复」Chip；新主题 / 编辑保留楼层标记。
-  bool get _showFloorMark => isNewThread || isEditing;
-
-  String get _metaLabel {
-    if (isEditing) return '编辑后效果';
-    if (isNewThread) return '即将发布';
-    return '即将回复';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final desktop = context.isExpandedOrAbove;
-    final imageIndexCounter = PostImageIndexCounter();
-    final letter = authorName.isNotEmpty ? authorName[0] : '?';
-    // 主题始终在卡上方作上下文；卡内只预览楼层正文（含签名）。
-    final showSubjectAbove = subject != null;
-
-    final postCard = Card(
-      elevation: 0,
-      color: S1Surface.card(scheme),
-      margin: EdgeInsets.zero,
-      clipBehavior: Clip.antiAlias,
-      shape: S1Shape.cardShape,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                WebAvatar(
-                  url: authorAvatar,
-                  radius: 20,
-                  fallbackLetter: letter,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        authorName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      Text(
-                        _metaLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (_showFloorMark)
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: scheme.secondaryContainer,
-                      borderRadius: S1Shape.extraSmall,
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
-                      child: CompactLabel.text(
-                        _floorLabel,
-                        style: CompactLabel.style(
-                          context,
-                          base: textTheme.labelSmall,
-                          color: scheme.onSecondaryContainer,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-            Divider(height: 16, color: scheme.outlineVariant),
-            if (quoteInfo != null)
-              BbcodeRenderer(
-                bbcode: '[quote]${EditPostMessageParts(
-                      leadingQuote: quoteInfo!.noticeTrimStr,
-                      body: '',
-                    ).quoteInner ?? quoteInfo!.noticeTrimStr}[/quote]',
-                imageIndexCounter: imageIndexCounter,
-                currentTid: tid,
-                selectable: false,
-              ),
-            BbcodeRenderer(
-              bbcode: previewBbcode.isEmpty ? '（无内容）' : previewBbcode,
-              imageIndexCounter: imageIndexCounter,
-              // Dialog 打开动画首帧 SelectionArea 会 assert !debugNeedsLayout。
-              selectable: false,
-            ),
-          ],
-        ),
-      ),
-    );
-
-    return S1AdaptiveSheetScaffold(
-      title: '预览',
-      scrollable: true,
-      maxHeightFactor: desktop ? 0.78 : 0.72,
-      footer: S1AdaptiveSheetFooter(
-        primaryLabel: submitLabel,
-        onPrimary: canSubmit ? () => Navigator.of(context).pop(true) : null,
-        primaryEnabled: canSubmit,
-        secondaryLabel: desktop ? '关闭' : null,
-        onSecondary: desktop ? () => Navigator.of(context).maybePop() : null,
-      ),
-      children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (showSubjectAbove) ...[
-              Text(
-                isNewThread ? subject! : '主题 · $subject',
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style:
-                    (isNewThread ? textTheme.titleMedium : textTheme.labelLarge)
-                        ?.copyWith(
-                  color:
-                      isNewThread ? scheme.onSurface : scheme.onSurfaceVariant,
-                  fontWeight: isNewThread ? FontWeight.w600 : null,
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            if (attachPreviewLimited) ...[
-              Text(
-                '部分论坛附件图暂无地址，预览可能显示附件码；保存后仍会按原附件提交。',
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            postCard,
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-/// 发帖元信息（标题 / 分类 / 权限）共用：filled 色阶，无硬描边。
-InputDecorationTheme _composeMetaInputTheme(ColorScheme scheme) {
-  return InputDecorationTheme(
-    filled: true,
-    fillColor: scheme.surfaceContainerHigh,
-    border: const OutlineInputBorder(
-      borderRadius: S1Shape.small,
-      borderSide: BorderSide.none,
-    ),
-    enabledBorder: const OutlineInputBorder(
-      borderRadius: S1Shape.small,
-      borderSide: BorderSide.none,
-    ),
-    focusedBorder: OutlineInputBorder(
-      borderRadius: S1Shape.small,
-      borderSide: BorderSide(color: scheme.primary, width: 2),
-    ),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-  );
-}
-
-InputDecoration _composeMetaDecoration(
-  BuildContext context, {
-  required String labelText,
-}) {
-  final scheme = Theme.of(context).colorScheme;
-  final theme = _composeMetaInputTheme(scheme);
-  return InputDecoration(
-    labelText: labelText,
-    filled: theme.filled,
-    fillColor: theme.fillColor,
-    border: theme.border,
-    enabledBorder: theme.enabledBorder,
-    focusedBorder: theme.focusedBorder,
-    contentPadding: theme.contentPadding,
-  );
-}
-
-/// M3 [DropdownMenu]：浮层菜单（圆角 + 低 elevation），替代割裂的 [DropdownButtonFormField]。
-class _ComposeDropdownMenu extends StatelessWidget {
-  const _ComposeDropdownMenu({
-    required this.label,
-    required this.entries,
-    required this.selected,
-    required this.onSelected,
-  });
-
-  final String label;
-  final List<({String value, String label})> entries;
-  final String? selected;
-  final ValueChanged<String?> onSelected;
-
-  static const _noneValue = '';
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    String effective;
-    if (selected != null && entries.any((e) => e.value == selected)) {
-      effective = selected!;
-    } else if (entries.any((e) => e.value == _noneValue)) {
-      effective = _noneValue;
-    } else if (entries.isNotEmpty) {
-      effective = entries.first.value;
-    } else {
-      effective = _noneValue;
-    }
-
-    return DropdownMenu<String>(
-      key: ValueKey('$label-$effective'),
-      initialSelection: effective,
-      label: Text(label),
-      expandedInsets: EdgeInsets.zero,
-      inputDecorationTheme: _composeMetaInputTheme(scheme),
-      menuStyle: MenuStyle(
-        backgroundColor: WidgetStatePropertyAll(scheme.surfaceContainer),
-        elevation: const WidgetStatePropertyAll(3),
-        shadowColor: WidgetStatePropertyAll(scheme.shadow),
-        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
-        shape: const WidgetStatePropertyAll(
-          RoundedRectangleBorder(borderRadius: S1Shape.small),
-        ),
-        maximumSize: const WidgetStatePropertyAll(Size(double.infinity, 320)),
-        padding: const WidgetStatePropertyAll(
-          EdgeInsets.symmetric(vertical: 8),
-        ),
-      ),
-      dropdownMenuEntries: [
-        for (final entry in entries)
-          DropdownMenuEntry<String>(
-            value: entry.value,
-            label: entry.label,
-            style: ButtonStyle(
-              textStyle: WidgetStatePropertyAll(
-                Theme.of(context).textTheme.bodyLarge,
-              ),
-              maximumSize: const WidgetStatePropertyAll(
-                Size(double.infinity, double.infinity),
-              ),
-            ),
-          ),
-      ],
-      onSelected: (value) {
-        if (value == null || value == _noneValue) {
-          onSelected(null);
-        } else {
-          onSelected(value);
-        }
-      },
-    );
-  }
-}
-
-String _composeThreadMetaSummary({
-  required Map<String, String> threadTypes,
-  required Map<String, String> readPermissions,
-  required String? selectedTypeId,
-  required String? selectedReadPerm,
-  required bool typeRequired,
-}) {
-  final parts = <String>[];
-  if (threadTypes.isNotEmpty) {
-    if (typeRequired &&
-        (selectedTypeId == null ||
-            selectedTypeId.isEmpty ||
-            !threadTypes.containsKey(selectedTypeId))) {
-      parts.add('请选择分类');
-    } else if (selectedTypeId != null &&
-        selectedTypeId.isNotEmpty &&
-        threadTypes.containsKey(selectedTypeId)) {
-      parts.add(threadTypes[selectedTypeId]!);
-    } else {
-      parts.add('不分类');
-    }
-  }
-  if (readPermissions.isNotEmpty) {
-    final perm = selectedReadPerm;
-    if (perm == null || perm.isEmpty || perm == '0') {
-      parts.add('权限不限');
-    } else {
-      parts.add('阅读权限 ${readPermissions[perm] ?? perm}');
-    }
-  }
-  if (parts.isEmpty) return '';
-  return '主题设置 · ${parts.join(' · ')}';
-}
-
-bool _composeThreadMetaSummaryHasError({
-  required Map<String, String> threadTypes,
-  required String? selectedTypeId,
-  required bool typeRequired,
-}) {
-  return threadTypes.isNotEmpty &&
-      typeRequired &&
-      (selectedTypeId == null ||
-          selectedTypeId.isEmpty ||
-          !threadTypes.containsKey(selectedTypeId));
-}
-
-class _ComposeThreadMetaFields extends StatelessWidget {
-  const _ComposeThreadMetaFields({
-    required this.threadTypes,
-    required this.readPermissions,
-    required this.selectedTypeId,
-    required this.selectedReadPerm,
-    required this.allowUncategorized,
-    required this.onTypeChanged,
-    required this.onReadPermChanged,
-  });
-
-  final Map<String, String> threadTypes;
-  final Map<String, String> readPermissions;
-  final String? selectedTypeId;
-  final String? selectedReadPerm;
-  final bool allowUncategorized;
-  final ValueChanged<String?> onTypeChanged;
-  final ValueChanged<String?> onReadPermChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (threadTypes.isNotEmpty)
-          _ComposeDropdownMenu(
-            label: '主题分类',
-            selected:
-                threadTypes.containsKey(selectedTypeId) ? selectedTypeId : null,
-            onSelected: onTypeChanged,
-            entries: [
-              if (allowUncategorized) (value: '', label: '不分类'),
-              for (final entry in threadTypes.entries)
-                (value: entry.key, label: entry.value),
-            ],
-          ),
-        if (readPermissions.isNotEmpty) ...[
-          if (threadTypes.isNotEmpty) const SizedBox(height: 12),
-          _ComposeDropdownMenu(
-            label: '阅读权限',
-            selected: readPermissions.containsKey(selectedReadPerm)
-                ? selectedReadPerm
-                : null,
-            onSelected: onReadPermChanged,
-            entries: [
-              for (final entry in readPermissions.entries)
-                (value: entry.key, label: entry.value),
-            ],
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-class _ComposeThreadMetaSummaryRow extends StatelessWidget {
-  const _ComposeThreadMetaSummaryRow({
-    required this.summary,
-    required this.hasError,
-    required this.onTap,
-  });
-
-  final String summary;
-  final bool hasError;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                summary,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.labelMedium?.copyWith(
-                  color: hasError ? scheme.error : scheme.onSurfaceVariant,
-                ),
-              ),
-            ),
-            Icon(
-              Icons.settings_outlined,
-              size: 18,
-              color: scheme.onSurfaceVariant,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeCollapsedTitleLine extends StatelessWidget {
-  const _ComposeCollapsedTitleLine({
-    required this.title,
-    required this.onTap,
-  });
-
-  final String title;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final display = title.trim().isEmpty ? '未填写标题' : title.trim();
-    return Material(
-      color: scheme.surfaceContainer,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  '主题 · $display',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.labelMedium?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              Icon(
-                Icons.expand_more,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// 正文 filled 输入：空态用 Highest 凹槽；有内容 / 聚焦时降到 Low，区分「内容态」。
-class _NewThreadHeader extends StatelessWidget {
-  const _NewThreadHeader({
-    required this.form,
-    required this.controller,
-    required this.selectedTypeId,
-    required this.collapseTitle,
-    required this.subjectFocusNode,
-    required this.onExpandTitle,
-    required this.onTypeChanged,
-    required this.onOpenThreadSettings,
-  });
-
-  final NewThreadFormInfo? form;
-  final TextEditingController controller;
-  final String? selectedTypeId;
-  final bool collapseTitle;
-  final FocusNode subjectFocusNode;
-  final VoidCallback onExpandTitle;
-  final ValueChanged<String?> onTypeChanged;
-  final VoidCallback onOpenThreadSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-    final scheme = Theme.of(context).colorScheme;
-    if (form == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: LinearProgressIndicator(),
-      );
-    }
-    if (form?.error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          form!.error!,
-          style: textTheme.bodyMedium?.copyWith(color: scheme.error),
-        ),
-      );
-    }
-    final types = form?.threadTypes ?? const <String, String>{};
-    final compact = !context.isExpandedOrAbove;
-    final typeRequired = form?.typeRequired ?? false;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (collapseTitle)
-                _ComposeCollapsedTitleLine(
-                  title: controller.text,
-                  onTap: onExpandTitle,
-                )
-              else
-                TextField(
-                  controller: controller,
-                  focusNode: subjectFocusNode,
-                  textInputAction: TextInputAction.next,
-                  keyboardType: TextInputType.multiline,
-                  minLines: 1,
-                  maxLines: 3,
-                  style: textTheme.titleMedium,
-                  decoration:
-                      _composeMetaDecoration(context, labelText: '主题标题'),
-                ),
-              if (types.isNotEmpty) ...[
-                SizedBox(height: collapseTitle ? 8 : 12),
-                if (compact)
-                  _ComposeThreadMetaSummaryRow(
-                    summary: _composeThreadMetaSummary(
-                      threadTypes: types,
-                      readPermissions: const {},
-                      selectedTypeId: selectedTypeId,
-                      selectedReadPerm: null,
-                      typeRequired: typeRequired,
-                    ),
-                    hasError: _composeThreadMetaSummaryHasError(
-                      threadTypes: types,
-                      selectedTypeId: selectedTypeId,
-                      typeRequired: typeRequired,
-                    ),
-                    onTap: onOpenThreadSettings,
-                  )
-                else
-                  _ComposeThreadMetaFields(
-                    threadTypes: types,
-                    readPermissions: const {},
-                    selectedTypeId: selectedTypeId,
-                    selectedReadPerm: null,
-                    allowUncategorized: !typeRequired,
-                    onTypeChanged: onTypeChanged,
-                    onReadPermChanged: (_) {},
-                  ),
-              ],
-            ],
-          ),
-        ),
-        Divider(
-          height: 1,
-          thickness: 1,
-          color: scheme.outlineVariant.withValues(alpha: S1Alpha.half),
-        ),
-      ],
-    );
-  }
-}
-
-class _EditPostHeader extends StatelessWidget {
-  const _EditPostHeader({
-    required this.form,
-    required this.controller,
-    required this.selectedTypeId,
-    required this.selectedReadPerm,
-    required this.collapseTitle,
-    required this.subjectFocusNode,
-    required this.onExpandTitle,
-    required this.onTypeChanged,
-    required this.onReadPermChanged,
-    required this.onOpenThreadSettings,
-  });
-
-  final EditPostFormInfo? form;
-  final TextEditingController controller;
-  final String? selectedTypeId;
-  final String? selectedReadPerm;
-  final bool collapseTitle;
-  final FocusNode subjectFocusNode;
-  final VoidCallback onExpandTitle;
-  final ValueChanged<String?> onTypeChanged;
-  final ValueChanged<String?> onReadPermChanged;
-  final VoidCallback onOpenThreadSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    final form = this.form;
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    if (form?.error != null) {
-      return Padding(
-        padding: const EdgeInsets.all(16),
-        child: Text(
-          form!.error!,
-          style: textTheme.bodyMedium?.copyWith(color: scheme.error),
-        ),
-      );
-    }
-    if (form == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: LinearProgressIndicator(),
-      );
-    }
-    final compact = !context.isExpandedOrAbove;
-    final hasSettings =
-        form.threadTypes.isNotEmpty || form.readPermissions.isNotEmpty;
-    if (!form.isFirst && !hasSettings) {
-      return const SizedBox.shrink();
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (form.isFirst) ...[
-                if (collapseTitle)
-                  _ComposeCollapsedTitleLine(
-                    title: controller.text,
-                    onTap: onExpandTitle,
-                  )
-                else
-                  TextField(
-                    controller: controller,
-                    focusNode: subjectFocusNode,
-                    textInputAction: TextInputAction.next,
-                    keyboardType: TextInputType.multiline,
-                    minLines: 1,
-                    maxLines: 3,
-                    style: textTheme.titleMedium,
-                    decoration:
-                        _composeMetaDecoration(context, labelText: '主题标题'),
-                  ),
-              ],
-              if (hasSettings) ...[
-                if (form.isFirst) SizedBox(height: collapseTitle ? 8 : 12),
-                if (compact)
-                  _ComposeThreadMetaSummaryRow(
-                    summary: _composeThreadMetaSummary(
-                      threadTypes: form.threadTypes,
-                      readPermissions: form.readPermissions,
-                      selectedTypeId:
-                          form.threadTypes.containsKey(selectedTypeId)
-                              ? selectedTypeId
-                              : null,
-                      selectedReadPerm: form.readPermissions.containsKey(
-                        selectedReadPerm,
-                      )
-                          ? selectedReadPerm
-                          : null,
-                      typeRequired: false,
-                    ),
-                    hasError: false,
-                    onTap: onOpenThreadSettings,
-                  )
-                else ...[
-                  if (form.threadTypes.isNotEmpty)
-                    _ComposeThreadMetaFields(
-                      threadTypes: form.threadTypes,
-                      readPermissions: form.readPermissions,
-                      selectedTypeId:
-                          form.threadTypes.containsKey(selectedTypeId)
-                              ? selectedTypeId
-                              : null,
-                      selectedReadPerm: form.readPermissions.containsKey(
-                        selectedReadPerm,
-                      )
-                          ? selectedReadPerm
-                          : null,
-                      allowUncategorized: true,
-                      onTypeChanged: onTypeChanged,
-                      onReadPermChanged: onReadPermChanged,
-                    ),
-                ],
-              ],
-            ],
-          ),
-        ),
-        Divider(
-          height: 1,
-          thickness: 1,
-          color: scheme.outlineVariant.withValues(alpha: S1Alpha.half),
-        ),
-      ],
-    );
-  }
-}
-
-class _EditPostStatus extends StatelessWidget {
-  const _EditPostStatus({
-    required this.message,
-    required this.actionLabel,
-    required this.onPressed,
-  });
-
-  final String message;
-  final String actionLabel;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Material(
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                message,
-                style: textTheme.bodySmall?.copyWith(
-                  color: scheme.onErrorContainer,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: onPressed,
-              child: Text(
-                actionLabel,
-                style: textTheme.labelLarge?.copyWith(
-                  color: scheme.onErrorContainer,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeMessageField extends StatelessWidget {
-  const _ComposeMessageField({
-    required this.controller,
-    required this.focusNode,
-    required this.hintText,
-    required this.onTap,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final String hintText;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final hasContent = controller.text.trim().isNotEmpty;
-    final focused = focusNode.hasFocus;
-    final active = hasContent || focused;
-    final desktop = context.isExpandedOrAbove;
-    // 桌面 Card 内透明贴合奶油表面；手机保持 Highest 凹槽 / Low 内容态。
-    final fillColor = desktop
-        ? Colors.transparent
-        : (active
-            ? scheme.surfaceContainerLow
-            : scheme.surfaceContainerHighest);
-
-    return AnimatedContainer(
-      duration: S1Motion.short,
-      curve: S1Motion.standard,
-      color: fillColor,
-      child: TextField(
-        controller: controller,
-        focusNode: focusNode,
-        maxLines: null,
-        expands: true,
-        textAlignVertical: TextAlignVertical.top,
-        style: textTheme.bodyLarge,
-        onTap: onTap,
-        // 正文区几乎全屏；空内容时长按会放大 hint，误触极多。选区/粘贴菜单仍可用。
-        magnifierConfiguration: TextMagnifierConfiguration.disabled,
-        decoration: InputDecoration(
-          filled: true,
-          fillColor: Colors.transparent,
-          hintText: hintText,
-          hintStyle: textTheme.bodyLarge?.copyWith(
-            color: scheme.onSurfaceVariant,
-          ),
-          // expands 输入框底边 underline 会横在工具栏上方，看起来像粗分隔线。
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          contentPadding: const EdgeInsets.all(16),
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeSubjectLine extends StatefulWidget {
-  const _ComposeSubjectLine({required this.subject});
-
-  final String subject;
-
-  @override
-  State<_ComposeSubjectLine> createState() => _ComposeSubjectLineState();
-}
-
-class _ComposeSubjectLineState extends State<_ComposeSubjectLine> {
-  bool _expanded = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    return Material(
-      color: scheme.surfaceContainer,
-      child: InkWell(
-        onTap: () => setState(() => _expanded = !_expanded),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  '主题 · ${widget.subject}',
-                  maxLines: _expanded ? null : 1,
-                  overflow:
-                      _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
-                  style: textTheme.labelMedium?.copyWith(
-                    color:
-                        _expanded ? scheme.onSurface : scheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-              Icon(
-                _expanded ? Icons.expand_less : Icons.expand_more,
-                color: scheme.onSurfaceVariant,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeQuoteBanner extends StatefulWidget {
-  const _ComposeQuoteBanner({
-    this.post,
-    this.displayFloor = 0,
-    this.title,
-    this.preview,
-    required this.onRemove,
-    this.loading = false,
-    this.error,
-  });
-
-  final Post? post;
-  final int displayFloor;
-
-  /// 编辑页等：直接给标题/摘要（优先于 [post]）。
-  final String? title;
-  final String? preview;
-  final VoidCallback onRemove;
-  final bool loading;
-  final String? error;
-
-  @override
-  State<_ComposeQuoteBanner> createState() => _ComposeQuoteBannerState();
-}
-
-class _ComposeQuoteBannerState extends State<_ComposeQuoteBanner> {
-  bool _expanded = false;
-  bool _initialized = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_initialized) {
-      _expanded = context.isExpandedOrAbove;
-      _initialized = true;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final post = widget.post;
-    final resolvedPreview = widget.preview ??
-        (post == null ? '' : QuoteBuilder.previewText(post.message));
-    final resolvedTitle = widget.title ??
-        (post == null
-            ? '引用楼层'
-            : widget.displayFloor > 0
-                ? '引用 #${widget.displayFloor} 楼 · ${post.author}'
-                : '引用 ${post.author}');
-
-    return Material(
-      color: scheme.surfaceContainerHigh,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (widget.loading)
-            LinearProgressIndicator(
-              minHeight: 2,
-              color: scheme.primary,
-              backgroundColor: scheme.surfaceContainerHighest,
-            ),
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Container(width: 3, color: scheme.primary),
-                Expanded(
-                  child: InkWell(
-                    onTap: () {
-                      setState(() => _expanded = !_expanded);
-                    },
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 0, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  resolvedTitle,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: textTheme.labelLarge?.copyWith(
-                                    color: scheme.onSurface,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                              ),
-                              Icon(
-                                _expanded
-                                    ? Icons.expand_less
-                                    : Icons.expand_more,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                              const SizedBox(width: 4),
-                            ],
-                          ),
-                          if (_expanded && widget.error != null) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              widget.error!,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: scheme.error,
-                              ),
-                            ),
-                          ],
-                          if (_expanded && resolvedPreview.isNotEmpty) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              resolvedPreview,
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                              style: textTheme.bodySmall?.copyWith(
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: '移除引用',
-                  onPressed: widget.onRemove,
-                  icon: Icon(Icons.close, color: scheme.onSurfaceVariant),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ComposeMediaPreviewHint extends StatelessWidget {
-  const _ComposeMediaPreviewHint();
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    return Material(
-      color: scheme.surfaceContainerLow,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-        child: Text(
-          '正文中的 ⟦图N⟧ 可挪动以调整排版；无缩略图的论坛附件仍会保存。',
-          style: textTheme.bodySmall?.copyWith(
-            color: scheme.onSurfaceVariant,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeImageStrip extends StatefulWidget {
-  const _ComposeImageStrip({
-    required this.images,
-    required this.onRemove,
-  });
-
-  final List<_ComposeUploadedImage> images;
-  final ValueChanged<_ComposeUploadedImage> onRemove;
-
-  @override
-  State<_ComposeImageStrip> createState() => _ComposeImageStripState();
-}
-
-class _ComposeImageStripState extends State<_ComposeImageStrip> {
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final maxLabelWidth =
-        (MediaQuery.sizeOf(context).width * 0.4).clamp(88.0, 120.0);
-
-    return Material(
-      color: scheme.surfaceContainer,
-      child: SizedBox(
-        height: 56,
-        child: ScrollConfiguration(
-          behavior: ScrollConfiguration.of(context).copyWith(
-            dragDevices: {
-              PointerDeviceKind.touch,
-              PointerDeviceKind.mouse,
-              PointerDeviceKind.trackpad,
-            },
-          ),
-          child: Scrollbar(
-            controller: _scrollController,
-            thumbVisibility: false,
-            child: ListView.separated(
-              controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
-              scrollDirection: Axis.horizontal,
-              itemCount: widget.images.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (context, index) {
-                final image = widget.images[index];
-                return Tooltip(
-                  message: image.label,
-                  child: InputChip(
-                    avatar: _ComposeImageChipAvatar(image: image),
-                    label: SizedBox(
-                      width: maxLabelWidth,
-                      child: Text(
-                        displayLabelForIndex(
-                          (image.slot != null && image.slot! > 0)
-                              ? image.slot! - 1
-                              : index,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.labelMedium,
-                      ),
-                    ),
-                    onDeleted: () => widget.onRemove(image),
-                    deleteIcon: Icon(
-                      Icons.close,
-                      size: 18,
-                      color: scheme.onSecondaryContainer,
-                    ),
-                    backgroundColor: scheme.secondaryContainer,
-                    side: BorderSide.none,
-                  ),
-                );
-              },
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Chip 头像：有 URL 显示缩略图，否则按附件类型给图标。
-class _ComposeImageChipAvatar extends StatelessWidget {
-  const _ComposeImageChipAvatar({required this.image});
-
-  final _ComposeUploadedImage image;
-
-  static const double _size = 24;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final iconColor = scheme.onSecondaryContainer;
-    if (!image.hasThumb) {
-      return Icon(
-        image.isForumAttach
-            ? Icons.attach_file
-            : (image.isAttachimg
-                ? Icons.image_not_supported_outlined
-                : Icons.image_outlined),
-        size: 18,
-        color: iconColor,
-      );
-    }
-
-    final url = platformImageUrl(image.previewUrl!.trim(), isWeb: kIsWeb);
-    return ClipOval(
-      child: CachedNetworkImage(
-        imageUrl: url,
-        cacheManager: s1ImageCacheManager,
-        width: _size,
-        height: _size,
-        fit: BoxFit.cover,
-        fadeInDuration: Duration.zero,
-        fadeOutDuration: Duration.zero,
-        placeholder: (_, __) => Icon(
-          Icons.image_outlined,
-          size: 18,
-          color: iconColor,
-        ),
-        errorWidget: (_, __, ___) => Icon(
-          Icons.broken_image_outlined,
-          size: 18,
-          color: iconColor,
-        ),
-      ),
-    );
-  }
-}
-
-class _ComposeImageUploadOptions extends StatelessWidget {
-  const _ComposeImageUploadOptions({
-    required this.expanded,
-    required this.source,
-    required this.useOriginal,
-    required this.enabled,
-    required this.onExpandedChanged,
-    required this.onSourceChanged,
-    required this.onOriginalChanged,
-  });
-
-  final bool expanded;
-  final ComposeImageUploadSource source;
-  final bool useOriginal;
-  final bool enabled;
-  final ValueChanged<bool> onExpandedChanged;
-  final ValueChanged<ComposeImageUploadSource> onSourceChanged;
-  final ValueChanged<bool> onOriginalChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final sourceLabel = source == ComposeImageUploadSource.forum ? '论坛' : '外链';
-    final qualityLabel = useOriginal ? '原图' : '压缩';
-    final summary = '图片：$sourceLabel · $qualityLabel';
-
-    return Material(
-      color: Colors.transparent,
-      elevation: 0,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkWell(
-            onTap: enabled ? () => onExpandedChanged(!expanded) : null,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      summary,
-                      style: textTheme.labelMedium?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ),
-                  Icon(
-                    Icons.tune,
-                    size: 18,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          AnimatedCrossFade(
-            firstChild: const SizedBox(width: double.infinity),
-            secondChild: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    '论坛更稳；外链不占论坛附件额度',
-                    style: textTheme.bodySmall?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SegmentedButton<ComposeImageUploadSource>(
-                    segments: const [
-                      ButtonSegment(
-                        value: ComposeImageUploadSource.forum,
-                        label: Text('论坛'),
-                      ),
-                      ButtonSegment(
-                        value: ComposeImageUploadSource.external,
-                        label: Text('外链'),
-                      ),
-                    ],
-                    selected: {source},
-                    onSelectionChanged: enabled
-                        ? (next) {
-                            if (next.isEmpty) return;
-                            onSourceChanged(next.first);
-                          }
-                        : null,
-                    showSelectedIcon: false,
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text('原图上传', style: textTheme.bodyMedium),
-                    subtitle: Text(
-                      '关闭时最长边约 2000px',
-                      style: textTheme.bodySmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
-                      ),
-                    ),
-                    value: useOriginal,
-                    onChanged: enabled ? onOriginalChanged : null,
-                  ),
-                ],
-              ),
-            ),
-            crossFadeState:
-                expanded ? CrossFadeState.showSecond : CrossFadeState.showFirst,
-            duration: S1Motion.medium,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ComposeBottomBar extends StatelessWidget {
-  const _ComposeBottomBar({
-    required this.busy,
-    required this.canSubmit,
-    required this.canPreview,
-    required this.isSubmitting,
-    required this.isUploadingImage,
-    required this.characterCount,
-    required this.emoticonPanelOpen,
-    required this.onPickImage,
-    required this.onToggleEmoticon,
-    required this.onPreview,
-    required this.onSubmit,
-    required this.onBbcodeWrap,
-    required this.onInsertUrl,
-    required this.onWrapColor,
-    required this.onInsertCreditHide,
-    this.uploadProgressLabel,
-    this.submitLabel = '发送',
-  });
-
-  final bool busy;
-  final bool canSubmit;
-  final bool canPreview;
-  final bool isSubmitting;
-  final bool isUploadingImage;
-  final int characterCount;
-  final String? uploadProgressLabel;
-  final bool emoticonPanelOpen;
-  final VoidCallback onPickImage;
-  final VoidCallback onToggleEmoticon;
-  final VoidCallback onPreview;
-  final VoidCallback onSubmit;
-  final void Function(String openTag, String closeTag) onBbcodeWrap;
-  final VoidCallback onInsertUrl;
-  final ValueChanged<String> onWrapColor;
-  final VoidCallback onInsertCreditHide;
-  final String submitLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
-    final desktop = context.isExpandedOrAbove;
-    final imageLabel = uploadProgressLabel ?? (isUploadingImage ? '上传中' : '图片');
-
-    return Material(
-      color: desktop ? Colors.transparent : S1BottomBarStyle.background(scheme),
-      elevation: 0,
-      child: AnimatedPadding(
-        duration: S1Motion.rapid,
-        curve: S1Motion.standard,
-        padding: EdgeInsets.only(bottom: bottomInset),
-        child: SafeArea(
-          top: false,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ComposeBbcodeToolbar(
-                busy: busy,
-                onWrap: onBbcodeWrap,
-                onInsertUrl: onInsertUrl,
-                onWrapColor: onWrapColor,
-                onInsertCreditHide: onInsertCreditHide,
-              ),
-              Divider(
-                height: 1,
-                thickness: 1,
-                color: scheme.outlineVariant.withValues(alpha: S1Alpha.half),
-              ),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
-                child: Row(
-                  children: [
-                    if (desktop) ...[
-                      TextButton.icon(
-                        onPressed: busy ? null : onToggleEmoticon,
-                        icon: Icon(
-                          emoticonPanelOpen
-                              ? Icons.keyboard_outlined
-                              : Icons.emoji_emotions_outlined,
-                        ),
-                        label: Text(emoticonPanelOpen ? '键盘' : '表情'),
-                      ),
-                      TextButton.icon(
-                        onPressed: busy ? null : onPickImage,
-                        icon: isUploadingImage
-                            ? SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              )
-                            : const Icon(Icons.image_outlined),
-                        label: Text(imageLabel),
-                      ),
-                    ] else ...[
-                      IconButton(
-                        tooltip: emoticonPanelOpen ? '键盘' : '表情',
-                        onPressed: busy ? null : onToggleEmoticon,
-                        icon: Icon(
-                          emoticonPanelOpen
-                              ? Icons.keyboard_outlined
-                              : Icons.emoji_emotions_outlined,
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: imageLabel,
-                        onPressed: busy ? null : onPickImage,
-                        icon: isUploadingImage
-                            ? SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: scheme.onSurfaceVariant,
-                                ),
-                              )
-                            : const Icon(Icons.image_outlined),
-                      ),
-                    ],
-                    const Spacer(),
-                    if (desktop) ...[
-                      Text(
-                        '$characterCount 字',
-                        style: textTheme.labelSmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                    IconButton(
-                      tooltip: '预览',
-                      onPressed: canPreview && !busy ? onPreview : null,
-                      icon: const Icon(Icons.visibility_outlined),
-                    ),
-                    FilledButton(
-                      onPressed: canSubmit ? onSubmit : null,
-                      style: FilledButton.styleFrom(
-                        disabledForegroundColor: scheme.onSurface
-                            .withValues(alpha: S1Alpha.disabledIcon),
-                        disabledBackgroundColor:
-                            scheme.onSurface.withValues(alpha: S1Alpha.subtle),
-                      ),
-                      child: isSubmitting
-                          ? Text(
-                              '发送中…',
-                              maxLines: 1,
-                              style: textTheme.labelLarge?.copyWith(
-                                color: scheme.onPrimary,
-                              ),
-                            )
-                          : Text(submitLabel, maxLines: 1),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ),
         ),
       ),

@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FLUTTER_VERSION: '3.47.5'
+  FLUTTER_VERSION: '3.47.9'
   TZ: Asia/Singapore
   S1_UPDATE_REPOSITORY: ${{ github.repository }}
   S1_UPDATE_MANIFEST_URL: https://github.com/${{ github.repository }}/releases/latest/download/latest.json
@@ -35,8 +35,13 @@ jobs:
       - name: Release helper regression tests
         run: pwsh -File scripts/test_release.ps1
       - run: flutter analyze
+      - name: Install GTK/X11 dev headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libx11-dev libxi-dev
       - run: flutter test --reporter expanded
-      - run: dart run scripts/audit_m3.dart --fail-on-error
+      - run: dart scripts/audit_m3.dart --fail-on-error
+      - run: dart scripts/audit_cursors.dart --fail-on-error
 
   build:
     name: Build ${{ matrix.target }}

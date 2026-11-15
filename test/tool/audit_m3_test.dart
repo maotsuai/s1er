@@ -1,3 +1,9 @@
+// The audit reads Dart sources only. Running it through `dart <script>` keeps
+// `dart run` from resolving the package's native build hooks (a cold cnativeapi
+// compile) inside this test.
+@Timeout(Duration(minutes: 2))
+library;
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -6,7 +12,7 @@ void main() {
   test('audit_m3.dart reports zero P0 on project lib/', () async {
     final result = await Process.run(
       'dart',
-      ['run', 'scripts/audit_m3.dart', '--fail-on-error'],
+      ['scripts/audit_m3.dart', '--fail-on-error'],
       runInShell: true,
     );
 

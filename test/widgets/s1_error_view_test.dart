@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:s1er/theme/app_theme.dart';
-import 'package:s1er/services/api_service.dart';
+import 'package:s1er/models/app_exceptions.dart';
 import 'package:s1er/widgets/s1_error_view.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -13,6 +13,82 @@ void main() {
       );
 
   group('S1ErrorView', () {
+    testWidgets('5xx 主文案保持友好，详情默认折叠', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          S1ErrorView(
+            error: DioException(
+              requestOptions: RequestOptions(path: '/x'),
+              response: Response(
+                requestOptions: RequestOptions(path: '/x'),
+                statusCode: 503,
+              ),
+              error: const ServerBusyException(
+                statusCode: 503,
+                detail: 'in_array(): Argument #2 must be of type array',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(find.text('加载失败'), findsOneWidget);
+      // 用户可见文案不暴露服务端实现细节。
+      expect(find.text('服务器暂时不可用，请稍后再试'), findsOneWidget);
+      expect(
+        find.text('in_array(): Argument #2 must be of type array'),
+        findsNothing,
+      );
+
+      // 默认折叠；展开后才出现技术细节。
+      expect(find.text('查看详情'), findsOneWidget);
+      await tester.tap(find.text('查看详情'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('收起详情'), findsOneWidget);
+      expect(
+        find.textContaining('HTTP 503'),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('in_array(): Argument #2'),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('5xx 带响应体摘要时详情可展开', (tester) async {
+      await tester.pumpWidget(
+        wrap(
+          S1ErrorView(
+            error: DioException(
+              requestOptions: RequestOptions(path: '/x'),
+              response: Response(
+                requestOptions: RequestOptions(path: '/x'),
+                statusCode: 503,
+              ),
+              error: const ServerBusyException(
+                statusCode: 503,
+                detail: 'stage1st.com - System Error',
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      expect(find.text('加载失败'), findsOneWidget);
+      expect(find.text('服务器暂时不可用，请稍后再试'), findsOneWidget);
+      expect(find.textContaining('stage1st.com - System Error'), findsNothing);
+
+      await tester.tap(find.text('查看详情'));
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('stage1st.com - System Error'),
+        findsOneWidget,
+      );
+    });
+
     testWidgets('维护异常显示扳手图标和论坛原文', (tester) async {
       await tester.pumpWidget(
         wrap(

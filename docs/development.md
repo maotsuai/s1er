@@ -59,8 +59,8 @@ flutter build ios --no-codesign        # 无签名冒烟，验证工程可构建
 
 ### 性能排查（回应「卡卡的」类反馈）
 
-1. **先看构建模式**：设置 → 关于 → 版本行末尾的 `Debug` / `Release`。是 `Debug` 就先换 `--release` 重测。
-2. **帧率掉帧统计**：运行中若发生掉帧，App 会自动以 `[frame-timing]` 打一条聚合警告（每秒最多一条，仅掉帧秒出现）。入口：设置 → 关于 → **连点「版本」5 下** 打开 Talker 日志页。
+1. **先看构建模式**：设置 → 关于 → 版本行末尾的 `Debug` / `Release`。是 `Debug` 就先换 `--profile` 重测（`--release` 不注册下条的掉帧统计，无法复现日志）。
+2. **帧率掉帧统计**：仅 debug / profile 注册，release 零开销。运行中若发生掉帧，App 会自动以 `[frame-timing]` 打一条聚合警告（每秒最多一条，仅掉帧秒出现，首行带当前路由归属）。入口：设置 → 关于 → **连点「版本」5 下** 打开 Talker 日志页。
 3. **正文渲染打点**：编译时加 `--dart-define=BBCODE_PROFILE=true`，BBCode 解析 / Html 首帧耗时以 `[bbcode-profile]` 写入 Talker（App 内可见，无需连控制台）。
 4. **系统级分析**：`flutter run --profile` 后打开 DevTools Performance overlay，区分 UI 线程（build）与 Raster 线程瓶颈。
 
@@ -167,6 +167,7 @@ flutter run -d chrome --dart-define=PROXY_PORT=19081
 | `scripts/watch_proxy.ps1` | 监听代理文件变更并自动重启 |
 | `scripts/download_emoticons.dart` | 从 s1emoticon GitHub Release 按 `download_list.txt` 导入；见 `ATTRIBUTION.md` |
 | `scripts/audit_m3.dart` | 扫描 Material Design 3 合规问题 |
+| `scripts/audit_cursors.dart` | 扫描可点控件是否走 `S1InkWell` 或显式 `mouseCursor`（桌面/Web 指针策略） |
 | `scripts/sync_app_icons.dart` | 按 `AppIconCatalog` 生成 Android/iOS 交替启动器图标；iOS Info.plist 只做 `APP_ICON_ICONS` 标记区间替换（缺标记拒绝写入，纯函数 `scripts/ios_info_plist_patch.dart`，回归测试 `test/ios_info_plist_test.dart`）；规则见 [启动器图标](app-icons.md) |
 | `scripts/gen_windows_icon.dart` | 从黑底成品图生成 Windows `app_icon.ico`（无运行时切换） |
 | `scripts/build.ps1` | Windows 交互式构建菜单；Release 项需要维护者签名配置 |

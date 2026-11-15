@@ -24,6 +24,10 @@ class _Auth extends AuthNotifier {
 
 class _ForumTools extends ForumToolsService {
   _ForumTools(super.client);
+  @override
+  Future<AttendanceResult> fetchAttendanceStatus() async =>
+      const AttendanceResult(outcome: AttendanceOutcome.unknown, message: '');
+
   int calls = 0;
   bool fail = false;
   Completer<void>? gate;
@@ -57,49 +61,51 @@ class _Sync extends WebDavSyncNotifier {
 
 void main() {
   Future<void> settle() => pumpEventQueue(times: 30);
-  AuthState loggedIn(String uid) =>
-      AuthState(isLoggedIn: true, user: User(uid: uid, username: 'user'));
-
-  test('defaults do no work; startup sync executes once when opted in',
-      () async {
-    final (db, local) = await openTestLocalData();
-    addTearDown(db.close);
-    final container = ProviderContainer(
-      overrides: [
-        localDataProvider.overrideWithValue(local),
-        authStateProvider.overrideWith(_Auth.new),
-        webDavSyncProvider.overrideWith(_Sync.new),
-      ],
-    );
-    addTearDown(container.dispose);
-    container.read(startupAutomationCoordinatorProvider);
-    await settle();
-    final sync = container.read(webDavSyncProvider.notifier) as _Sync;
-    expect(sync.calls, 0);
-    await container
-        .read(automationSettingsProvider.notifier)
-        .setSyncOnStartup(true);
-    await settle();
-    expect(sync.calls, 0); // 开关变更不冒充冷启动。
-    final restarted = ProviderContainer(
-      overrides: [
-        localDataProvider.overrideWithValue(local),
-        authStateProvider.overrideWith(_Auth.new),
-        webDavSyncProvider.overrideWith(_Sync.new),
-      ],
-    );
-    addTearDown(restarted.dispose);
-    restarted.read(startupAutomationCoordinatorProvider);
-    await settle();
-    restarted.read(startupAutomationProvider.notifier).start();
-    restarted.read(authStateProvider.notifier).debugSetState(loggedIn('9'));
-    await settle();
-    expect((restarted.read(webDavSyncProvider.notifier) as _Sync).calls, 1);
-  });
+  AuthState loggedIn(String uid) => AuthState(
+    isLoggedIn: true,
+    user: User(uid: uid, username: 'user'),
+  );
 
   test(
-      'waits for session and uid, shares manual lock, persists daily skip across restart',
-      () async {
+    'defaults do no work; startup sync executes once when opted in',
+    () async {
+      final (db, local) = await openTestLocalData();
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          localDataProvider.overrideWithValue(local),
+          authStateProvider.overrideWith(_Auth.new),
+          webDavSyncProvider.overrideWith(_Sync.new),
+        ],
+      );
+      addTearDown(container.dispose);
+      container.read(startupAutomationCoordinatorProvider);
+      await settle();
+      final sync = container.read(webDavSyncProvider.notifier) as _Sync;
+      expect(sync.calls, 0);
+      await container
+          .read(automationSettingsProvider.notifier)
+          .setSyncOnStartup(true);
+      await settle();
+      expect(sync.calls, 0); // 开关变更不冒充冷启动。
+      final restarted = ProviderContainer(
+        overrides: [
+          localDataProvider.overrideWithValue(local),
+          authStateProvider.overrideWith(_Auth.new),
+          webDavSyncProvider.overrideWith(_Sync.new),
+        ],
+      );
+      addTearDown(restarted.dispose);
+      restarted.read(startupAutomationCoordinatorProvider);
+      await settle();
+      restarted.read(startupAutomationProvider.notifier).start();
+      restarted.read(authStateProvider.notifier).debugSetState(loggedIn('9'));
+      await settle();
+      expect((restarted.read(webDavSyncProvider.notifier) as _Sync).calls, 1);
+    },
+  );
+
+  test('waits for session and uid, shares manual lock, persists daily skip across restart', () async {
     final (db, local) = await openTestLocalData();
     addTearDown(db.close);
     await local.settings.putAsync('auto_daily_sign', true);
@@ -141,9 +147,7 @@ void main() {
     expect(forum.calls, 2);
   });
 
-  test(
-      'failed auto sign is visible and not automatically retried; manual retry works',
-      () async {
+  test('failed auto sign is visible and not automatically retried; manual retry works', () async {
     final (db, local) = await openTestLocalData();
     addTearDown(db.close);
     await local.settings.putAsync('auto_daily_sign', true);

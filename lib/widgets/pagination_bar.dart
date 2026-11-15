@@ -1,3 +1,4 @@
+import './s1_ink_well.dart';
 import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
@@ -283,10 +284,11 @@ class _PageIndicator extends StatelessWidget {
       button: true,
       enabled: enabled,
       label: '第 $currentPage / $totalPages 页，选择页码',
+      excludeSemantics: true,
       child: Material(
         color: scheme.secondaryContainer,
         borderRadius: S1Shape.full,
-        child: InkWell(
+        child: S1InkWell(
           onTap: enabled ? onTap : null,
           borderRadius: S1Shape.full,
           child: SizedBox(

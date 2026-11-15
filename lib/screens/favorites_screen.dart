@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -309,11 +310,18 @@ class _FavoriteThreadTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
+    // 移动版收藏列表只给标题，没有版块/时间/浏览数；空字符串仍会占一行高度。
+    final meta = [
+      if (item.forumName != null && item.forumName!.isNotEmpty) item.forumName,
+      if (item.dateline > 0) formatTimeAgo(item.dateline),
+      if (item.views != null) '${item.views} 浏览',
+      if (item.replies != null) '${item.replies} 回复',
+    ].whereType<String>().join(' · ');
 
     return Card(
       elevation: 0,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: InkWell(
+      child: S1InkWell(
         onTap: () => context.push(
           ThreadRouteCodec.encodePath(ResumeThread(item.id)),
         ),
@@ -332,25 +340,21 @@ class _FavoriteThreadTile extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 6),
-                    Text(
-                      [
-                        if (item.forumName != null &&
-                            item.forumName!.isNotEmpty)
-                          item.forumName,
-                        if (item.dateline > 0) formatTimeAgo(item.dateline),
-                        if (item.views != null) '${item.views} 浏览',
-                        if (item.replies != null) '${item.replies} 回复',
-                      ].whereType<String>().join(' · '),
-                      style: textTheme.labelSmall?.copyWith(
-                        color: scheme.onSurfaceVariant,
+                    if (meta.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        meta,
+                        style: textTheme.labelSmall?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
               IconButton(
-                tooltip: '取消收藏',
+                // 列表里每个按钮都叫「取消收藏」，读屏需要知道取消的是哪一条。
+                tooltip: '取消收藏：${item.title}',
                 icon: const Icon(Icons.bookmark_remove_outlined),
                 onPressed: onRemove,
               ),
@@ -381,7 +385,7 @@ class _FavoriteForumTile extends StatelessWidget {
     return Card(
       elevation: 0,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      child: InkWell(
+      child: S1InkWell(
         onTap: () => context.push('/forum/${item.id}'),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
@@ -420,7 +424,7 @@ class _FavoriteForumTile extends StatelessWidget {
                 ),
               ),
               IconButton(
-                tooltip: '取消收藏',
+                tooltip: '取消收藏：${item.title}',
                 icon: const Icon(Icons.bookmark_remove_outlined),
                 onPressed: onRemove,
               ),

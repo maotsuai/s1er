@@ -1,105 +1,211 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/rate_log.dart';
-import 'post_provider.dart';
+import '../services/http_client.dart';
+import '../services/rate_log_service.dart';
+import '../services/talker.dart';
 
 typedef RateLogKey = (String tid, String pid);
+
+final rateLogServiceProvider = Provider<RateLogService>((ref) {
+  return RateLogService(ref.watch(httpClientProvider));
+});
+
+/// 进程内会话缓存：按 (tid, pid) 存放解析结果，含「已确认无评分」的空条目，
+/// 避免标记命中但无评分的楼层被反复请求。
+///
+/// 不依赖 keepAlive Timer，避免 widget 测试残留定时器。
+class _RateLogSessionStore {
+  _RateLogSessionStore._();
+
+  static final Map<(String tid, String pid), _CachedRateLog> _logs = {};
+
+  /// 返回缓存条目；`log == null` 表示已确认该楼没有评分。
+  static _CachedRateLog? get(String tid, String pid) {
+    final key = (tid, pid);
+    final cached = _logs[key];
+    if (cached == null) return null;
+    if (DateTime.now().difference(cached.loadedAt) >=
+        const Duration(minutes: 2)) {
+      _logs.remove(key);
+      return null;
+    }
+    return cached;
+  }
+
+  static void putLog(String tid, String pid, PostRateLog log) {
+    _logs[(tid, pid)] = _CachedRateLog(log, DateTime.now());
+  }
+
+  static void putEmpty(String tid, String pid) {
+    _logs[(tid, pid)] = _CachedRateLog(null, DateTime.now());
+  }
+
+  static void clearTid(String tid) {
+    _logs.removeWhere((key, _) => key.$1 == tid);
+  }
+
+  @visibleForTesting
+  static void clearAll() => _logs.clear();
+}
 
 class ThreadRateLogsNotifier extends Notifier<Map<String, PostRateLog>> {
   ThreadRateLogsNotifier(this.tid);
 
   final String tid;
+  final Map<String, Future<bool>> _inFlightPids = {};
+  final Set<String> _markedPids = {};
+  final Set<int> _loadedPages = {};
   final Map<int, Future<void>> _inFlightPages = {};
-  final Map<int, Map<String, PostRateLog>> _pages = {};
-  int _cacheGeneration = 0;
+  int _generation = 0;
 
   @override
   Map<String, PostRateLog> build() {
     ref.onDispose(() {
-      _cacheGeneration++;
-      _pages.clear();
+      _generation++;
       _inFlightPages.clear();
     });
     return const {};
   }
 
   void clear() {
-    _cacheGeneration++;
+    _generation++;
+    _loadedPages.clear();
     _inFlightPages.clear();
-    _pages.clear();
+    _inFlightPids.clear();
+    _markedPids.clear();
+    _RateLogSessionStore.clearTid(tid);
     state = const {};
   }
 
-  /// 与正文分页一起淘汰，已发出的旧请求也不能重新填回被清理的页。
   void retainPages(Set<int> pages) {
-    _pages.removeWhere((page, _) => !pages.contains(page));
+    _loadedPages.retainAll(pages);
     _inFlightPages.removeWhere((page, _) => !pages.contains(page));
-    state = {for (final logs in _pages.values) ...logs};
   }
 
-  void mergePage(Map<String, PostRateLog> rateLogs) {
-    if (rateLogs.isEmpty) return;
-    state = {...state, ...rateLogs};
+  /// App / Mobile v1 没有评分标记，按页读取 HTML 并复用在途请求。
+  Future<void> ensurePageRateLogs(int page) {
+    if (_loadedPages.contains(page)) return Future.value();
+    return _inFlightPages.putIfAbsent(page, () {
+      late final Future<void> request;
+      request = ref
+          .read(rateLogServiceProvider)
+          .fetchRateLogsByPage(tid, page: page)
+          .then((logs) {
+        if (!ref.mounted || !identical(_inFlightPages[page], request)) {
+          return;
+        }
+        _loadedPages.add(page);
+        for (final log in logs.values) {
+          primeRateLog(log.pid, log);
+        }
+      }).catchError((Object error, StackTrace stack) {
+        talker.handle(
+          error,
+          stack,
+          'Rate logs unavailable tid=$tid page=$page',
+        );
+      }).whenComplete(() {
+        if (identical(_inFlightPages[page], request)) {
+          _inFlightPages.remove(page);
+        }
+      });
+      return request;
+    });
   }
 
-  void replacePage(Map<String, PostRateLog> rateLogs) {
-    state = rateLogs;
+  /// 登记本页 v4 `Variables.commentcount` 标记出的 pid。
+  ///
+  /// 只登记不请求；真正拉取由可见楼层的 `_PostRateLogSection` 触发，
+  /// 避免翻页时对本页所有标记楼批量发请求。
+  void markPids(Iterable<String> pids) {
+    _markedPids.addAll(pids.where((pid) => pid.isNotEmpty));
   }
 
-  void setForPid(String pid, PostRateLog log) {
-    state = {...state, pid: log};
+  /// 直接写入已解析好的评分记录（整页 HTML 兜底用），并登记标记。
+  void primeRateLog(String pid, PostRateLog log) {
+    if (pid.isEmpty) return;
+    _markedPids.add(pid);
+    _RateLogSessionStore.putLog(tid, pid, log);
+    if (ref.mounted) _setForPid(pid, log);
   }
 
-  Future<void> ensurePageRateLogs(int page, {bool force = false}) {
-    if (!force) {
-      final cached = _pages[page];
-      if (cached != null) {
-        mergePage(cached);
-        return Future.value();
+  bool isMarked(String pid) => _markedPids.contains(pid);
+
+  /// 拉取单楼评分记录（先查会话缓存）。
+  ///
+  /// 返回 true 表示已得到结果（有评分或无评分），false 表示请求失败
+  /// （不写缓存，调用方可提示重试）。同一 pid 的并发调用复用同一 future。
+  Future<bool> ensureRateLog(String pid) async {
+    if (pid.isEmpty) return true;
+
+    final cached = _RateLogSessionStore.get(tid, pid);
+    if (cached != null) {
+      final log = cached.log;
+      if (log != null && ref.mounted && state[pid] == null) {
+        _setForPid(pid, log);
       }
+      return true;
     }
 
-    final inFlight = _inFlightPages[page];
+    return _ensurePid(pid);
+  }
+
+  Future<bool> _ensurePid(String pid) {
+    final inFlight = _inFlightPids[pid];
     if (inFlight != null) return inFlight;
 
-    final service = ref.read(rateLogServiceProvider);
-    late final Future<void> future;
-    future = service.fetchRateLogs(tid, page: page).then((rateLogs) {
-      if (!ref.mounted || !identical(_inFlightPages[page], future)) return;
-      final previous = _pages[page];
-      _pages[page] = rateLogs;
-      state = {...state}
-        ..removeWhere((pid, _) => previous?.containsKey(pid) ?? false);
-      mergePage(rateLogs);
-    }).whenComplete(() {
-      if (identical(_inFlightPages[page], future)) _inFlightPages.remove(page);
+    late final Future<bool> future;
+    future = _fetchPid(pid).whenComplete(() {
+      if (identical(_inFlightPids[pid], future)) _inFlightPids.remove(pid);
     });
-    _inFlightPages[page] = future;
+    _inFlightPids[pid] = future;
     return future;
   }
 
-  Future<void> loadFullRateLog(String pid) async {
-    final generation = _cacheGeneration;
-    int? page;
-    Map<String, PostRateLog>? cached;
-    for (final entry in _pages.entries) {
-      if (entry.value.containsKey(pid)) {
-        page = entry.key;
-        cached = entry.value;
-        break;
-      }
-    }
+  /// 强制刷新单楼（评分提交后使用），不复用缓存与在途请求。
+  Future<bool> refreshRateLog(String pid) => _fetchPid(pid);
+
+  Future<bool> _fetchPid(String pid) async {
+    final generation = _generation;
     final service = ref.read(rateLogServiceProvider);
-    final full = await service.fetchFullRateLog(tid, pid);
-    if (!ref.mounted || generation != _cacheGeneration || full == null) return;
-    if (page != null && !identical(_pages[page], cached)) return;
-    setForPid(pid, full);
-    if (page != null && cached != null) {
-      _pages[page] = {...cached, pid: full};
+    try {
+      final log = await service.fetchRateLog(tid, pid);
+      if (!ref.mounted || generation != _generation) return false;
+      if (log == null) {
+        _RateLogSessionStore.putEmpty(tid, pid);
+        if (ref.mounted) _removePid(pid);
+        return true;
+      }
+      _RateLogSessionStore.putLog(tid, pid, log);
+      if (ref.mounted) _setForPid(pid, log);
+      return true;
+    } catch (e, st) {
+      // 请求/解析失败不写缓存，保留下次重试机会。
+      talker.handle(e, st, 'fetch rate log failed tid=$tid pid=$pid');
+      return false;
     }
   }
+
+  void _setForPid(String pid, PostRateLog log) {
+    state = {...state, pid: log};
+  }
+
+  void _removePid(String pid) {
+    if (!state.containsKey(pid)) return;
+    state = {...state}..remove(pid);
+  }
+}
+
+class _CachedRateLog {
+  const _CachedRateLog(this.log, this.loadedAt);
+
+  /// null 表示已确认该楼没有评分。
+  final PostRateLog? log;
+  final DateTime loadedAt;
 }
 
 final threadRateLogsProvider = NotifierProvider.autoDispose
@@ -107,10 +213,15 @@ final threadRateLogsProvider = NotifierProvider.autoDispose
   ThreadRateLogsNotifier.new,
 );
 
+/// Test helper: clear process-wide rate-log session cache.
+@visibleForTesting
+void clearRateLogSessionCacheForTest() => _RateLogSessionStore.clearAll();
+
 /// 按 (tid, pid) 订阅单条评分日志。
-final rateLogProvider = Provider.autoDispose.family<PostRateLog?, RateLogKey>(
-  (ref, key) {
-    final (tid, pid) = key;
-    return ref.watch(threadRateLogsProvider(tid).select((logs) => logs[pid]));
-  },
-);
+final rateLogProvider = Provider.autoDispose.family<PostRateLog?, RateLogKey>((
+  ref,
+  key,
+) {
+  final (tid, pid) = key;
+  return ref.watch(threadRateLogsProvider(tid).select((logs) => logs[pid]));
+});

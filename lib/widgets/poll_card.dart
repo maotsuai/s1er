@@ -1,3 +1,4 @@
+import './s1_ink_well.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -265,13 +266,25 @@ class _PollOptionTile extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
     final highlight = isUserVote || (selected && canSelect);
+    final percentLabel = option.percent.toStringAsFixed(
+      option.percent == option.percent.roundToDouble() ? 0 : 1,
+    );
+    // 外层 label 已含选项名；不排除子树时，可见文本、百分比、票数和
+    // LinearProgressIndicator 的 0–100 值会再拼一遍，读成
+    // 「投票选项：X X 4% 4票 4」。
+    final accessibleLabel = [
+      semanticsLabel,
+      if (isUserVote) '我的投票',
+      if (showResults) '$percentLabel%，${formatCount(option.votes)} 票',
+    ].join('，');
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Semantics(
         button: onTap != null,
-        label: semanticsLabel,
+        label: accessibleLabel,
         selected: selected || isUserVote,
+        excludeSemantics: true,
         child: Material(
           color: highlight
               ? scheme.primaryContainer.withValues(alpha: S1Alpha.light)
@@ -282,7 +295,7 @@ class _PollOptionTile extends StatelessWidget {
                 ? BorderSide(color: scheme.primary, width: 1.5)
                 : BorderSide.none,
           ),
-          child: InkWell(
+          child: S1InkWell(
             onTap: onTap,
             borderRadius: S1Shape.small,
             child: Padding(

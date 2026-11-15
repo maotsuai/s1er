@@ -1,3 +1,4 @@
+import '../s1_ink_well.dart';
 import 'package:flutter/material.dart';
 
 import '../../theme/app_theme.dart';
@@ -46,9 +47,12 @@ class ThemeColorPicker extends StatelessWidget {
           label: '${_colorLabels[key] ?? key}主题',
           selected: isSelected,
           button: onChanged != null,
+          // 内层 Tooltip 与短标签会再贡献一遍「暖沙」「沙」，读屏变成
+          // 「暖沙 暖沙主题 沙」；上方 label 已完整，直接排除子树。
+          excludeSemantics: true,
           child: Tooltip(
             message: _colorLabels[key] ?? key,
-            child: InkWell(
+            child: S1InkWell(
               onTap: onChanged != null
                   ? () {
                       S1Haptics.selection();

@@ -1,3 +1,4 @@
+import '../widgets/s1_ink_well.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -222,6 +223,7 @@ class _DailySignSection extends ConsumerWidget {
     final state = ref.watch(dailyAttendanceProvider);
     return DailySignCard(
       isSubmitting: state.isSubmitting,
+      loadingStatus: state.loadingStatus,
       result: state.result,
       onSign: () =>
           unawaited(ref.read(dailyAttendanceProvider.notifier).sign()),
@@ -262,7 +264,12 @@ class _HeaderCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            WebAvatar(url: avatarUrl, radius: 44, fallbackLetter: letter),
+            ExcludeSemantics(
+              // 头像（含加载失败时的首字母占位）对读屏无意义，
+              // 不排除时它会和昵称、头衔合并成一个 image 节点。
+              child:
+                  WebAvatar(url: avatarUrl, radius: 44, fallbackLetter: letter),
+            ),
             const SizedBox(height: 16),
             if (isLoggedIn) ...[
               Text(
@@ -392,45 +399,56 @@ class _S1StatsCard extends StatelessWidget {
         child: Row(
           children: [
             Expanded(
-              child: Column(
-                children: [
-                  Text('🐟', style: textTheme.headlineSmall),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${user.deadfish} 条',
-                    style: textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+              // 表情与「条/鹅」单位会读成「鱼 3300 条 死鱼」，合并成一句。
+              child: Semantics(
+                container: true,
+                label: '死鱼 ${user.deadfish} 条',
+                excludeSemantics: true,
+                child: Column(
+                  children: [
+                    Text('🐟', style: textTheme.headlineSmall),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${user.deadfish} 条',
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '死鱼',
-                    style: textTheme.labelMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 2),
+                    Text(
+                      '死鱼',
+                      style: textTheme.labelMedium?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
             Expanded(
-              child: Column(
-                children: [
-                  Text('🪿', style: textTheme.headlineSmall),
-                  const SizedBox(height: 6),
-                  Text(
-                    '${user.combat} 鹅',
-                    style: textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+              child: Semantics(
+                container: true,
+                label: '战斗力 ${user.combat} 鹅',
+                excludeSemantics: true,
+                child: Column(
+                  children: [
+                    Text('🪿', style: textTheme.headlineSmall),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${user.combat} 鹅',
+                      style: textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '战斗力',
-                    style: textTheme.labelMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
+                    const SizedBox(height: 2),
+                    Text(
+                      '战斗力',
+                      style: textTheme.labelMedium?.copyWith(
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -451,7 +469,9 @@ class _StatItem extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    final content = Column(
+    // 合并为「标签 数值」：不合并时按钮读成「2.2k 帖子」，数值在前不自然。
+    final semanticLabel = '$label ${formatCount(value)}';
+    final identity = Column(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -476,19 +496,31 @@ class _StatItem extends StatelessWidget {
       return Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
-          child: content,
+          // 不可点击项自己成节点，否则标签会丢失。
+          child: Semantics(
+            container: true,
+            label: semanticLabel,
+            excludeSemantics: true,
+            child: identity,
+          ),
         ),
       );
     }
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: S1InkWell(
         onTap: onTap,
         borderRadius: S1Shape.medium,
         child: Center(
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 8),
-            child: content,
+            // 不加 container：让 InkWell 的按钮节点吸收这句标签，
+            // 自建节点会把「按钮」角色从读屏里拿掉。
+            child: Semantics(
+              label: semanticLabel,
+              excludeSemantics: true,
+              child: identity,
+            ),
           ),
         ),
       ),
@@ -559,22 +591,30 @@ class _InfoTile extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: textTheme.bodyMedium?.copyWith(
-              color: colorScheme.onSurfaceVariant,
+    // 每行一个节点；不拆分时整张资料卡会连读成一长串。
+    return Semantics(
+      container: true,
+      label: '$label，$value',
+      excludeSemantics: true,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              label,
+              style: textTheme.bodyMedium?.copyWith(
+                color: colorScheme.onSurfaceVariant,
+              ),
             ),
-          ),
-          Text(
-            value,
-            style: textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w500),
-          ),
-        ],
+            Text(
+              value,
+              style: textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -612,7 +652,13 @@ class _FavoritesEntryCard extends ConsumerWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             if (count > 0) ...[
-              Badge(label: Text('$count')),
+              // 与阅读历史一致：裸数字徽标读屏只念「3」，补上计数对象。
+              Semantics(
+                label: '共 $count 项收藏',
+                child: ExcludeSemantics(
+                  child: Badge(label: Text('$count')),
+                ),
+              ),
               const SizedBox(width: 8),
             ],
             Icon(
@@ -676,7 +722,13 @@ class _SystemGroupCard extends ConsumerWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (count > 0) ...[
-                  Badge(label: Text('$count')),
+                  // 裸数字徽标读屏只念「2」，补上计数对象。
+                  Semantics(
+                    label: '共 $count 条阅读记录',
+                    child: ExcludeSemantics(
+                      child: Badge(label: Text('$count')),
+                    ),
+                  ),
                   const SizedBox(width: 8),
                 ],
                 Icon(
@@ -813,7 +865,7 @@ class _ProfileTwoLineRow extends StatelessWidget {
 
     return Material(
       color: Colors.transparent,
-      child: InkWell(
+      child: S1InkWell(
         onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.symmetric(
@@ -878,7 +930,7 @@ class _LogoutTile extends StatelessWidget {
       elevation: 0,
       child: Material(
         color: Colors.transparent,
-        child: InkWell(
+        child: S1InkWell(
           onTap: onTap,
           borderRadius: S1Shape.medium,
           child: Padding(

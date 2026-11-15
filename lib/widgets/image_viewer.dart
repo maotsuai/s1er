@@ -1,11 +1,13 @@
 import 'dart:collection';
 import 'dart:typed_data';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+
 import '../config/constants.dart';
 import '../config/resource_domains.dart';
 import '../providers/connectivity_provider.dart';
@@ -31,6 +33,7 @@ class ImageViewer extends ConsumerStatefulWidget {
     this.showBorder = false,
     this.margin,
     this.deferUntilVisible = false,
+    this.blockAlignment = Alignment.center,
   });
 
   /// Inline preview URL.
@@ -44,6 +47,9 @@ class ImageViewer extends ConsumerStatefulWidget {
 
   /// 为 true 时等到进入视口后再加载（帖子内联图片用）。
   final bool deferUntilVisible;
+
+  /// 块级图片在内容栏内的对齐方式（默认居中；分享卡左对齐正文边缘）。
+  final AlignmentGeometry blockAlignment;
 
   /// Flush process-local byte LRU (called when clearing disk cache in settings).
   static void clearMemoryCache() {
@@ -294,10 +300,7 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
   }
 
   ImageProvider _publicNetworkProvider(String url) {
-    return CachedNetworkImageProvider(
-      url,
-      cacheManager: s1ImageCacheManager,
-    );
+    return CachedNetworkImageProvider(url, cacheManager: s1ImageCacheManager);
   }
 
   Future<void> _loadAuthOrProxied(String url) async {
@@ -379,9 +382,7 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
 
   void _listenForPolicyChanges() {
     ref.listen(
-      settingsProvider.select(
-        (s) => (s.showImages, s.imageLoadPolicy),
-      ),
+      settingsProvider.select((s) => (s.showImages, s.imageLoadPolicy)),
       (previous, next) {
         if (widget.isEmoticon) return;
         if (ForceShowImages.read(context)) return;
@@ -405,21 +406,22 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
 
   @override
   Widget build(BuildContext context) {
-    final showImages = widget.isEmoticon ||
+    final showImages =
+        widget.isEmoticon ||
         ForceShowImages.of(context) ||
         ref.watch(settingsProvider.select((s) => s.showImages));
 
     _listenForPolicyChanges();
 
-    ref.listen<bool>(
-      settingsProvider.select((s) => s.showImages),
-      (previous, next) {
-        if (!widget.isEmoticon && next && previous == false) {
-          if (widget.deferUntilVisible && !_visibilityLoadTriggered) return;
-          _load();
-        }
-      },
-    );
+    ref.listen<bool>(settingsProvider.select((s) => s.showImages), (
+      previous,
+      next,
+    ) {
+      if (!widget.isEmoticon && next && previous == false) {
+        if (widget.deferUntilVisible && !_visibilityLoadTriggered) return;
+        _load();
+      }
+    });
 
     if (!showImages) {
       return _wrapDeferred(_wrapBlockImage(_buildHiddenPlaceholder()));
@@ -431,9 +433,7 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
         !_hasDisplayableImage &&
         !_loading &&
         !_deferredLoad) {
-      return _wrapDeferred(
-        _wrapBlockImage(_blockPlaceholder(height: 96)),
-      );
+      return _wrapDeferred(_wrapBlockImage(_blockPlaceholder(height: 96)));
     }
 
     if (widget.isEmoticon) return _wrapDeferred(_buildEmoticon(context));
@@ -482,10 +482,7 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
 
   Widget _wrapDeferred(Widget child) {
     if (!widget.deferUntilVisible || widget.isEmoticon) return child;
-    return LazyVisibilityLoader(
-      onVisible: _onBecomeVisible,
-      child: child,
-    );
+    return LazyVisibilityLoader(onVisible: _onBecomeVisible, child: child);
   }
 
   /// 帖内插图在内容栏内居中；表情保持行内。
@@ -497,18 +494,16 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
 
     child = S1ReadingSwipeBlocker(child: child);
 
-    if (widget.margin != null) {
-      child = Padding(padding: widget.margin!, child: child);
-    }
-
-    return LayoutBuilder(
+    Widget wrapped = LayoutBuilder(
       builder: (context, constraints) {
-        final maxWidth = constraints.hasBoundedWidth &&
+        final maxWidth =
+            constraints.hasBoundedWidth &&
                 constraints.maxWidth.isFinite &&
                 constraints.maxWidth > 0
             ? constraints.maxWidth
             : 300.0;
-        return Center(
+        return Align(
+          alignment: widget.blockAlignment,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxWidth: maxWidth),
             child: child,
@@ -516,14 +511,15 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
         );
       },
     );
+
+    if (widget.margin != null) {
+      wrapped = Padding(padding: widget.margin!, child: wrapped);
+    }
+    return wrapped;
   }
 
   Widget _blockPlaceholder({required double height, Widget? child}) {
-    return SizedBox(
-      width: double.infinity,
-      height: height,
-      child: child,
-    );
+    return SizedBox(width: double.infinity, height: height, child: child);
   }
 
   Widget _buildImage(ImageProvider provider) {
@@ -541,8 +537,9 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
           onLongPress: () => _showActions(context),
           child: LayoutBuilder(
             builder: (context, constraints) {
-              final layoutWidth =
-                  constraints.hasBoundedWidth ? constraints.maxWidth : 300.0;
+              final layoutWidth = constraints.hasBoundedWidth
+                  ? constraints.maxWidth
+                  : 300.0;
               final decodeWidth = inlineDecodeWidthPx(layoutWidth, dpr);
               final imageProvider = inlineImageProvider(provider, decodeWidth);
 
@@ -558,24 +555,24 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
                   gaplessPlayback: true,
                   frameBuilder:
                       (context, child, frame, wasSynchronouslyLoaded) {
-                    if (wasSynchronouslyLoaded) return child;
-                    // 加载中不把 child 放进布局树：opacity:0 仍会参与 Stack 尺寸，
-                    // 异常/失败图片的固有高度会把占位撑成「超长条」。
-                    if (frame == null) {
-                      return const SizedBox(
-                        width: double.infinity,
-                        height: 96,
-                        child: Center(
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      );
-                    }
-                    return AnimatedOpacity(
-                      opacity: 1.0,
-                      duration: const Duration(milliseconds: 150),
-                      child: child,
-                    );
-                  },
+                        if (wasSynchronouslyLoaded) return child;
+                        // 加载中不把 child 放进布局树：opacity:0 仍会参与 Stack 尺寸，
+                        // 异常/失败图片的固有高度会把占位撑成「超长条」。
+                        if (frame == null) {
+                          return const SizedBox(
+                            width: double.infinity,
+                            height: 96,
+                            child: Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        }
+                        return AnimatedOpacity(
+                          opacity: 1.0,
+                          duration: const Duration(milliseconds: 150),
+                          child: child,
+                        );
+                      },
                   errorBuilder: (_, __, ___) {
                     WidgetsBinding.instance.addPostFrameCallback((_) {
                       if (mounted) _handlePublicImageError();
@@ -601,6 +598,8 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
           child: child,
         ),
       );
+    } else if (!widget.isEmoticon) {
+      child = ClipRRect(borderRadius: S1Shape.small, child: child);
     }
 
     return child;
@@ -695,7 +694,8 @@ class _ImageViewerState extends ConsumerState<ImageViewer> {
 
   Widget _buildEmoticon(BuildContext context) {
     const double size = 24.0;
-    final provider = _imageProvider ??
+    final provider =
+        _imageProvider ??
         (!kIsWeb ? _publicNetworkProvider(widget.imageUrl) : null);
     Widget child = provider == null
         ? const SizedBox(width: size, height: size)
